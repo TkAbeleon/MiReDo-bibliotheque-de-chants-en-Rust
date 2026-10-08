@@ -193,7 +193,7 @@ impl MiReDoApp {
         let pdf_cache_dir = directories::ProjectDirs::from("org", "MiReDo", "MiReDo")
             .context("Impossible de trouver le dossier de cache")?
             .cache_dir()
-            .join("pdf-pages");
+            .join("pdf-pages-pdfium-v1");
 
         Ok(Self {
             translator,
