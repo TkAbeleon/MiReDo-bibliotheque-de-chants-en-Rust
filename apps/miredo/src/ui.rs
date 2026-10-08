@@ -11,7 +11,7 @@ use eframe::egui::{
 
 use crate::data::{self, DataLoadReport};
 use crate::domain::{Collection, Playlist, Song};
-use crate::pdf::{self, PdfRenderResponse};
+use crate::pdf::{self, PdfRenderResponse, PdfRenderer};
 use crate::resources::{Palette, Translator};
 use crate::search::{self, SearchFilters};
 use crate::storage::UserStorage;
@@ -151,7 +151,8 @@ pub struct MiReDoApp {
     status: Option<(String, Instant)>,
     fullscreen: bool,
     pdf_page: usize,
-    pdf_sender: Sender<PdfRenderResponse>,
+    pdf_renderer: PdfRenderer,
+    pdf_response_sender: Sender<PdfRenderResponse>,
     pdf_receiver: Receiver<PdfRenderResponse>,
     pdf_textures: HashMap<String, TextureHandle>,
     pdf_errors: HashMap<String, String>,
@@ -189,7 +190,8 @@ impl MiReDoApp {
         let favorites = storage.favorite_ids()?;
         let playlists = storage.playlists()?;
         let last_song_id = storage.preference("last_song")?;
-        let (pdf_sender, pdf_receiver) = channel();
+        let (pdf_receiver_sender, pdf_receiver) = channel();
+        let pdf_renderer = PdfRenderer::new();
         let pdf_cache_dir = directories::ProjectDirs::from("org", "MiReDo", "MiReDo")
             .context("Impossible de trouver le dossier de cache")?
             .cache_dir()
@@ -229,7 +231,8 @@ impl MiReDoApp {
             status: None,
             fullscreen: false,
             pdf_page: 1,
-            pdf_sender,
+            pdf_renderer,
+            pdf_response_sender: pdf_receiver_sender,
             pdf_receiver,
             pdf_textures: HashMap::new(),
             pdf_errors: HashMap::new(),
@@ -394,8 +397,8 @@ impl MiReDoApp {
             self.pdf_pending.remove(&key);
             return;
         };
-        pdf::request_page(
-            self.pdf_sender.clone(),
+        self.pdf_renderer.request_page(
+            self.pdf_response_sender.clone(),
             song.id.clone(),
             page,
             render_zoom,
