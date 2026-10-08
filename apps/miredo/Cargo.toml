@@ -5,9 +5,12 @@ edition = "2024"
 description = "Bibliothèque de chants de bureau MiReDo"
 
 [dependencies]
+# egui-lucide supplies SVG path data; egui_extras loads it using MiReDo's egui version.
 anyhow = "1"
 directories = "6"
 eframe = "0.32"
+egui-lucide = "0.1"
+egui_extras = { version = "0.32", features = ["svg"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 hayro = "0.8.0"
 rusqlite = { version = "0.37", features = ["bundled"] }
