@@ -551,7 +551,7 @@ impl MiReDoApp {
     fn pdf_render_zoom(&self) -> f32 {
         match self.pdf_fit_mode {
             PdfFitMode::Manual => self.zoom.max(0.5),
-            PdfFitMode::FitScreen | PdfFitMode::FitWidth | PdfFitMode::FitHeight => 3.0,
+            PdfFitMode::FitScreen | PdfFitMode::FitWidth | PdfFitMode::FitHeight => 4.0,
         }
     }
 
@@ -1382,43 +1382,57 @@ impl MiReDoApp {
 
             ui.separator();
 
-            ui.menu_button("Aa", |ui| {
-                if ui
-                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitScreen, self.tr("reader.fit_screen"))
-                    .clicked()
-                {
-                    self.set_pdf_fit_mode(PdfFitMode::FitScreen);
-                    ui.close();
-                }
-                if ui
-                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitWidth, self.tr("reader.fit_width"))
-                    .clicked()
-                {
-                    self.set_pdf_fit_mode(PdfFitMode::FitWidth);
-                    ui.close();
-                }
-                if ui
-                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitHeight, self.tr("reader.fit_height"))
-                    .clicked()
-                {
-                    self.set_pdf_fit_mode(PdfFitMode::FitHeight);
-                    ui.close();
-                }
-                if ui
-                    .selectable_label(self.pdf_fit_mode == PdfFitMode::Manual, self.tr("reader.manual_zoom"))
-                    .clicked()
-                {
-                    self.set_pdf_fit_mode(PdfFitMode::Manual);
-                    ui.close();
-                }
-            });
-
-            ui.label(match self.pdf_fit_mode {
-                PdfFitMode::FitScreen => self.tr("reader.fit_screen_short"),
-                PdfFitMode::FitWidth => self.tr("reader.fit_width_short"),
-                PdfFitMode::FitHeight => self.tr("reader.fit_height_short"),
-                PdfFitMode::Manual => format!("{:.0}%", self.zoom * 100.0),
-            });
+            let fit_label = match self.pdf_fit_mode {
+                PdfFitMode::FitScreen => self.tr("reader.fit_screen"),
+                PdfFitMode::FitWidth => self.tr("reader.fit_width"),
+                PdfFitMode::FitHeight => self.tr("reader.fit_height"),
+                PdfFitMode::Manual => self.tr("reader.manual_zoom"),
+            };
+            egui::ComboBox::from_id_salt("pdf-fit-mode")
+                .selected_text(fit_label)
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(
+                            self.pdf_fit_mode == PdfFitMode::FitScreen,
+                            self.tr("reader.fit_screen"),
+                        )
+                        .clicked()
+                    {
+                        self.set_pdf_fit_mode(PdfFitMode::FitScreen);
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(
+                            self.pdf_fit_mode == PdfFitMode::FitWidth,
+                            self.tr("reader.fit_width"),
+                        )
+                        .clicked()
+                    {
+                        self.set_pdf_fit_mode(PdfFitMode::FitWidth);
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(
+                            self.pdf_fit_mode == PdfFitMode::FitHeight,
+                            self.tr("reader.fit_height"),
+                        )
+                        .clicked()
+                    {
+                        self.set_pdf_fit_mode(PdfFitMode::FitHeight);
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(
+                            self.pdf_fit_mode == PdfFitMode::Manual,
+                            self.tr("reader.manual_zoom"),
+                        )
+                        .clicked()
+                    {
+                        self.set_pdf_fit_mode(PdfFitMode::Manual);
+                        ui.close();
+                    }
+                });
 
             if ui
                 .button("−")
@@ -1656,9 +1670,12 @@ impl MiReDoApp {
         pages: &[usize],
         available: Vec2,
     ) {
-        const GAP: f32 = 8.0;
+        const GAP: f32 = 6.0;
+        const SAFE_INSET: f32 = 3.0;
 
+        let viewport = (available - Vec2::splat(SAFE_INSET * 2.0)).max(Vec2::splat(1.0));
         let render_zoom = self.pdf_render_zoom();
+
         let textures = pages
             .iter()
             .map(|page| {
@@ -1687,9 +1704,9 @@ impl MiReDoApp {
 
         let scale = if pages.len() == 1 {
             let logical = textures[0].1;
-            (available.x / logical.x)
-                .min(available.y / logical.y)
-                .clamp(0.01, 6.0)
+            let sx = viewport.x / logical.x.max(1.0);
+            let sy = viewport.y / logical.y.max(1.0);
+            sx.min(sy)
         } else {
             let total_width = textures.iter().map(|(_, size)| size.x).sum::<f32>() + GAP;
             let max_height = textures
@@ -1697,26 +1714,44 @@ impl MiReDoApp {
                 .map(|(_, size)| size.y)
                 .fold(0.0_f32, f32::max);
 
-            (available.x / total_width)
-                .min(available.y / max_height)
-                .clamp(0.01, 6.0)
-        };
+            let sx = viewport.x / total_width.max(1.0);
+            let sy = viewport.y / max_height.max(1.0);
+            sx.min(sy)
+        }
+        .clamp(0.01, 6.0);
 
         if pages.len() == 1 {
             let (texture, logical_size) = textures[0];
             let display_size = logical_size * scale;
-            ui.vertical_centered(|ui| {
-                ui.image((texture.id(), display_size));
-            });
+            let rect = ui.available_rect_before_wrap();
+            let left = rect.center().x - display_size.x / 2.0;
+            let top = rect.center().y - display_size.y / 2.0;
+            let draw_rect = egui::Rect::from_min_size(
+                egui::pos2(left, top),
+                display_size,
+            );
+
+            ui.put(draw_rect, egui::Image::new((texture.id(), display_size)));
         } else {
-            ui.horizontal_centered(|ui| {
-                for (index, (texture, logical_size)) in textures.iter().enumerate() {
-                    ui.image((texture.id(), *logical_size * scale));
-                    if index + 1 < textures.len() {
-                        ui.add_space(GAP);
-                    }
+            let total_display_width = textures
+                .iter()
+                .map(|(_, size)| size.x * scale)
+                .sum::<f32>()
+                + GAP;
+            let start_x = ui.available_rect_before_wrap().center().x - total_display_width / 2.0;
+
+            let mut x = start_x;
+            let center_y = ui.available_rect_before_wrap().center().y;
+            for (index, (texture, logical_size)) in textures.iter().enumerate() {
+                let display_size = *logical_size * scale;
+                let y = center_y - display_size.y / 2.0;
+                let rect = egui::Rect::from_min_size(egui::pos2(x, y), display_size);
+                ui.put(rect, egui::Image::new((texture.id(), display_size)));
+                x += display_size.x;
+                if index + 1 < textures.len() {
+                    x += GAP;
                 }
-            });
+            }
         }
     }
 
