@@ -1811,16 +1811,23 @@ impl MiReDoApp {
         song_id: &str,
         page: usize,
         max_width: f32,
-        max_height: f32,
+        _max_height: f32,
     ) {
         let key = pdf::page_key(song_id, page, self.zoom);
         if let Some(texture) = self.pdf_textures.get(&key) {
             let size = texture.size_vec2();
-            let fit_scale = (max_width / size.x)
-                .min(max_height / size.y)
-                .max(0.01);
-            let scale = (fit_scale * self.zoom).clamp(0.1, 4.0);
-            ui.centered_and_justified(|ui| {
+
+            // Les pages sont rendues à une résolution qui suit le zoom.
+            // On reconstruit la taille logique de base afin que le zoom
+            // ne soit pas appliqué deux fois.
+            let logical_size = size / self.zoom.max(0.01);
+            let fit_width = (max_width / logical_size.x).max(0.01);
+            let scale = (fit_width * self.zoom).clamp(0.1, 6.0);
+
+            // Priorité à la largeur disponible : pour une partition,
+            // une lecture plus grande avec défilement vertical est préférable
+            // à une page artificiellement réduite pour tenir en hauteur.
+            ui.vertical_centered(|ui| {
                 ui.image((texture.id(), size * scale));
             });
         } else if self.pdf_pending.contains(&key) {
