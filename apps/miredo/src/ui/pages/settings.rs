@@ -194,10 +194,10 @@ impl MiReDoApp {
 
     pub(in crate::ui) fn settings_card_frame(&self) -> egui::Frame {
         egui::Frame::new()
-            .fill(self.palette().get("surface"))
+            .fill(self.palette().get("surface_elevated"))
             .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
-            .corner_radius(6)
-            .inner_margin(egui::Margin::same(16))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::same(20))
     }
 
     fn settings_section(&self, ui: &mut egui::Ui, key: &str) {

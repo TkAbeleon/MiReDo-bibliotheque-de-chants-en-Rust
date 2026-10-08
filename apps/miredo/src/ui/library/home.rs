@@ -62,10 +62,10 @@ impl MiReDoApp {
                 let title = self.title_for_song(&song);
                 let subtitle = self.reader_subtitle(&song);
                 egui::Frame::new()
-                    .fill(self.palette().get("surface"))
+                    .fill(self.palette().get("surface_elevated"))
                     .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
-                    .corner_radius(8)
-                    .inner_margin(egui::Margin::same(14))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::same(18))
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -107,10 +107,10 @@ impl MiReDoApp {
                     });
             } else {
                 egui::Frame::new()
-                    .fill(self.palette().get("surface"))
+                    .fill(self.palette().get("surface_elevated"))
                     .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
-                    .corner_radius(6)
-                    .inner_margin(egui::Margin::same(14))
+                    .corner_radius(8)
+                    .inner_margin(egui::Margin::same(18))
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         ui.label(self.tr("home.continue_empty"));
@@ -118,10 +118,10 @@ impl MiReDoApp {
             }
         } else {
             egui::Frame::new()
-                .fill(self.palette().get("surface"))
+                .fill(self.palette().get("surface_elevated"))
                 .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
-                .corner_radius(6)
-                .inner_margin(egui::Margin::same(14))
+                .corner_radius(8)
+                .inner_margin(egui::Margin::same(18))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.label(self.tr("home.continue_empty"));
@@ -154,8 +154,9 @@ impl MiReDoApp {
                     let response = ui.add_sized(
                         [tile_width, 72.0],
                         egui::Button::new("")
-                            .fill(self.palette().get("surface"))
-                            .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle"))),
+                            .fill(self.palette().get("surface_elevated"))
+                            .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
+                            .corner_radius(8),
                     );
                     let tile_painter = ui.painter().with_clip_rect(response.rect.shrink(10.0));
                     tile_painter.text(
@@ -170,7 +171,7 @@ impl MiReDoApp {
                         egui::Align2::RIGHT_CENTER,
                         count.to_string(),
                         egui::FontId::proportional(16.0),
-                        self.palette().get("accent"),
+                        self.palette().get("accent_secondary"),
                     );
                     if response.clicked() {
                         self.collection_filter = Some(*collection);

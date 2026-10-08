@@ -129,7 +129,7 @@ impl MiReDoApp {
                         format!("{author} · {collection} · {preview}")
                     };
 
-                    ui.add_space(4.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         let action_width = 44.0
                             + if remove_from_playlist.is_some() {
@@ -140,17 +140,35 @@ impl MiReDoApp {
                         let content_width =
                             (ui.available_width() - action_width - ui.spacing().item_spacing.x)
                                 .max(1.0);
-                        let row = ui.allocate_ui_with_layout(
-                            Vec2::new(content_width, 44.0),
-                            Layout::left_to_right(Align::Center),
-                            |ui| {
-                                let row_bg = if selected {
-                                    self.palette().get("surface_selected")
-                                } else {
-                                    self.palette().get("surface")
-                                };
-                                ui.painter()
-                                    .rect_filled(ui.max_rect().shrink(2.0), 8.0, row_bg);
+                        let (row_rect, _) = ui.allocate_exact_size(
+                            Vec2::new(content_width, 48.0),
+                            egui::Sense::hover(),
+                        );
+                        let row_response = ui.interact(
+                            row_rect,
+                            Id::new(("song-row", song_id)),
+                            egui::Sense::click(),
+                        );
+                        let row_bg = if selected {
+                            self.palette().get("surface_selected")
+                        } else if row_response.hovered() {
+                            self.palette().get("surface_hover")
+                        } else {
+                            self.palette().get("surface_elevated")
+                        };
+                        ui.painter().rect_filled(row_rect.shrink(1.0), 8.0, row_bg);
+                        if selected {
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(
+                                    row_rect.left_top() + Vec2::new(1.0, 12.0),
+                                    Vec2::new(3.0, 24.0),
+                                ),
+                                2.0,
+                                self.palette().get("accent"),
+                            );
+                        }
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                                 ui.add_sized(
                                     [48.0, 38.0],
                                     egui::Label::new(
@@ -181,27 +199,15 @@ impl MiReDoApp {
                                             ui.label(
                                                 RichText::new("PDF")
                                                     .size(10.5)
-                                                    .color(self.palette().get("accent")),
+                                                    .color(self.palette().get("accent_secondary")),
                                             );
                                         }
                                     });
                                 });
-                            },
-                        );
-                        let row_response = ui.interact(
-                            row.response.rect,
-                            Id::new(("song-row", song_id)),
-                            egui::Sense::click(),
-                        );
+                            });
+                        });
                         if row_response.clicked() {
                             open_id = Some(song_id.clone());
-                        }
-                        if row_response.hovered() && !selected {
-                            ui.painter().rect_filled(
-                                row.response.rect.shrink(2.0),
-                                8.0,
-                                self.palette().get("surface_hover"),
-                            );
                         }
                         row_response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
@@ -233,8 +239,7 @@ impl MiReDoApp {
                             }
                         });
                     });
-                    ui.add_space(4.0);
-                    ui.separator();
+                    ui.add_space(6.0);
                 }
             });
 

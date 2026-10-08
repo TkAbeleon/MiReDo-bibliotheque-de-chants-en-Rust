@@ -39,10 +39,18 @@ pub fn apply_theme(app: &MiReDoApp, context: &egui::Context) {
     visuals.hyperlink_color = palette.get("accent");
     visuals.override_text_color = Some(palette.get("text_primary"));
     visuals.window_stroke = Stroke::new(1.0_f32, palette.get("border_subtle"));
-    visuals.widgets.noninteractive.corner_radius = 6.into();
-    visuals.widgets.inactive.corner_radius = 6.into();
-    visuals.widgets.hovered.corner_radius = 6.into();
-    visuals.widgets.active.corner_radius = 6.into();
+    visuals.widgets.noninteractive.corner_radius = 8.into();
+    visuals.widgets.inactive.corner_radius = 8.into();
+    visuals.widgets.hovered.corner_radius = 8.into();
+    visuals.widgets.active.corner_radius = 8.into();
 
     context.set_visuals(visuals);
+
+    let mut style = context.style().as_ref().clone();
+    style.spacing.item_spacing = egui::vec2(12.0, 10.0);
+    style.spacing.button_padding = egui::vec2(11.0, 7.0);
+    style.spacing.interact_size = egui::vec2(34.0, 34.0);
+    style.spacing.window_margin = egui::Margin::same(20);
+    style.spacing.menu_margin = egui::Margin::same(8);
+    context.set_style(style);
 }

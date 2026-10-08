@@ -348,9 +348,10 @@ impl eframe::App for MiReDoApp {
                 .fill(self.palette().get("viewer_background"))
                 .inner_margin(egui::Margin::ZERO)
         } else {
+            let outer_margin = if narrow_window { 12 } else { 22 };
             egui::Frame::new()
                 .fill(self.palette().get("background"))
-                .inner_margin(egui::Margin::same(22))
+                .inner_margin(egui::Margin::same(outer_margin))
         };
 
         egui::CentralPanel::default()
@@ -360,13 +361,16 @@ impl eframe::App for MiReDoApp {
                     self.draw_pdf_reader_immersive(context, ui);
                 } else {
                     self.draw_topbar(context, ui);
+                    let content_margin = if narrow_window { 14 } else { 22 };
                     ScrollArea::vertical()
                         .id_salt("main-page-content")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             egui::Frame::new()
-                                .fill(self.palette().get("background"))
-                                .inner_margin(egui::Margin::same(16))
+                                .fill(self.palette().get("surface"))
+                                .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
+                                .corner_radius(10)
+                                .inner_margin(egui::Margin::same(content_margin))
                                 .show(ui, |ui| self.draw_page(context, ui));
                         });
                 }

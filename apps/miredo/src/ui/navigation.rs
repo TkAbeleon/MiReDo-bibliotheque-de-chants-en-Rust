@@ -87,7 +87,7 @@ impl MiReDoApp {
     fn nav_item(&mut self, ui: &mut egui::Ui, page: Page, key: &str, icon: AppIcon) -> bool {
         let selected = self.page == page;
         let response = ui.add_sized(
-            [ui.available_width(), 38.0],
+            [ui.available_width(), 40.0],
             egui::Button::new("")
                 .fill(if selected {
                     self.palette().get("surface_selected")
@@ -96,6 +96,10 @@ impl MiReDoApp {
                 })
                 .stroke(Stroke::NONE),
         );
+        if response.hovered() && !selected {
+            ui.painter()
+                .rect_filled(response.rect, 8.0, self.palette().get("surface_hover"));
+        }
         let color = if selected {
             self.palette().get("accent")
         } else {

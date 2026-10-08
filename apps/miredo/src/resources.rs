@@ -47,6 +47,7 @@ impl Palette {
             "accent",
             "accent_hover",
             "accent_active",
+            "accent_secondary",
             "accent_text",
             "success",
             "warning",
@@ -138,7 +139,10 @@ mod tests {
 
         for locale in ["mg", "en"] {
             let keys: HashSet<_> = translator.translations[locale].keys().collect();
-            assert_eq!(keys, french, "clés de traduction incohérentes pour {locale}");
+            assert_eq!(
+                keys, french,
+                "clés de traduction incohérentes pour {locale}"
+            );
         }
     }
 }
