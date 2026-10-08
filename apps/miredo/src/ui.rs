@@ -109,6 +109,7 @@ pub struct MiReDoApp {
     zoom: f32,
     query: String,
     search_id: Option<Id>,
+    pdf_search_open: bool,
     collection_filter: Option<Collection>,
     pdf_filter: bool,
     selected_song_id: Option<String>,
@@ -154,7 +155,7 @@ impl MiReDoApp {
             .preference("pdf_zoom")?
             .and_then(|value| value.parse::<f32>().ok())
             .unwrap_or(1.0)
-            .clamp(0.7, 1.6);
+            .clamp(0.5, 3.0);
         let favorites = storage.favorite_ids()?;
         let playlists = storage.playlists()?;
         let last_song_id = storage.preference("last_song")?;
@@ -184,6 +185,7 @@ impl MiReDoApp {
             zoom,
             query: String::new(),
             search_id: None,
+            pdf_search_open: false,
             collection_filter: None,
             pdf_filter: false,
             selected_song_id: last_song_id.clone(),
@@ -233,21 +235,21 @@ impl MiReDoApp {
         visuals.extreme_bg_color = palette.get("surface");
         visuals.faint_bg_color = palette.get("surface_hover");
         visuals.selection.bg_fill = palette.get("surface_selected");
-        visuals.selection.stroke = Stroke::new(1.0, palette.get("focus"));
+        visuals.selection.stroke = Stroke::new(1.0_f32, palette.get("focus"));
         visuals.widgets.noninteractive.bg_fill = palette.get("surface");
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.get("text_primary"));
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.get("text_primary"));
         visuals.widgets.inactive.bg_fill = palette.get("surface");
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.get("text_secondary"));
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette.get("border_subtle"));
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.get("text_secondary"));
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.get("border_subtle"));
         visuals.widgets.hovered.bg_fill = palette.get("surface_hover");
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.get("text_primary"));
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.get("border_strong"));
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.get("text_primary"));
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.get("border_strong"));
         visuals.widgets.active.bg_fill = palette.get("surface_selected");
-        visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.get("text_primary"));
-        visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette.get("focus"));
+        visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.get("text_primary"));
+        visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.get("focus"));
         visuals.hyperlink_color = palette.get("accent");
         visuals.override_text_color = Some(palette.get("text_primary"));
-        visuals.window_stroke = Stroke::new(1.0, palette.get("border_subtle"));
+        visuals.window_stroke = Stroke::new(1.0_f32, palette.get("border_subtle"));
         visuals.widgets.noninteractive.corner_radius = 6.into();
         visuals.widgets.inactive.corner_radius = 6.into();
         visuals.widgets.hovered.corner_radius = 6.into();
@@ -259,14 +261,23 @@ impl MiReDoApp {
         let command_k =
             context.input(|input| input.modifiers.command && input.key_pressed(egui::Key::K));
         if command_k {
-            self.page = Page::Library;
-            if let Some(search_id) = self.search_id {
-                context.memory_mut(|memory| memory.request_focus(search_id));
+            if self.page == Page::Reader && self.viewer_mode == ViewerMode::Pdf {
+                self.pdf_search_open = true;
+                let id = Id::new("miredo-pdf-search");
+                self.search_id = Some(id);
+                context.memory_mut(|memory| memory.request_focus(id));
+            } else {
+                self.page = Page::Library;
+                if let Some(search_id) = self.search_id {
+                    context.memory_mut(|memory| memory.request_focus(search_id));
+                }
             }
         }
 
         let escape = context.input(|input| input.key_pressed(egui::Key::Escape));
-        if escape && self.fullscreen {
+        if escape && self.pdf_search_open {
+            self.pdf_search_open = false;
+        } else if escape && self.fullscreen {
             self.fullscreen = false;
             context.send_viewport_cmd(ViewportCommand::Fullscreen(false));
         }
@@ -297,8 +308,7 @@ impl MiReDoApp {
         if previous {
             self.move_song(-1);
         }
-        if toggle_favorite {
-            if let Some(song_id) = self.selected_song_id.clone() {
+        if toggle_favorite {            if let Some(song_id) = self.selected_song_id.clone() {
                 self.toggle_favorite(&song_id);
             }
         }
@@ -597,8 +607,7 @@ impl MiReDoApp {
                     };
                     let response = ui.add_sized(
                         [ui.available_width(), 34.0],
-                        egui::Button::new(
-                            RichText::new(if compact {
+                        egui::Button::new(                            RichText::new(if compact {
                                 language.to_owned()
                             } else {
                                 format!("{}  {language}", self.tr("settings.language"))
@@ -775,7 +784,7 @@ impl MiReDoApp {
                 let subtitle = self.reader_subtitle(&song);
                 egui::Frame::new()
                     .fill(self.palette().get("surface"))
-                    .stroke(Stroke::new(1.0, self.palette().get("border_subtle")))
+                    .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
                     .corner_radius(8)
                     .inner_margin(egui::Margin::same(14))
                     .show(ui, |ui| {
@@ -825,7 +834,7 @@ impl MiReDoApp {
                 let count = counts.get(&collection).copied().unwrap_or_default();
                 egui::Frame::new()
                     .fill(self.palette().get("surface"))
-                    .stroke(Stroke::new(1.0, self.palette().get("border_subtle")))
+                    .stroke(Stroke::new(1.0_f32, self.palette().get("border_subtle")))
                     .corner_radius(8)
                     .inner_margin(egui::Margin::same(14))
                     .show(ui, |ui| {
@@ -897,8 +906,7 @@ impl MiReDoApp {
                             Page::Library
                         };
                     }
-                    for (collection, label) in &collection_labels {
-                        if ui
+                    for (collection, label) in &collection_labels {                        if ui
                             .selectable_value(&mut self.collection_filter, Some(*collection), label)
                             .clicked()
                         {
@@ -1149,6 +1157,328 @@ impl MiReDoApp {
         }
     }
 
+    fn draw_pdf_reader_immersive(&mut self, context: &EguiContext, ui: &mut egui::Ui) {
+        let Some(song) = self.current_song().cloned() else {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.label(self.tr("reader.pdf_missing"));
+            });
+            return;
+        };
+
+        let navigation_position = self
+            .navigation_song_ids
+            .iter()
+            .position(|id| id == &song.id);
+        let previous_enabled = navigation_position.is_some_and(|index| index > 0);
+        let next_enabled = navigation_position
+            .is_some_and(|index| index + 1 < self.navigation_song_ids.len());
+
+        ui.horizontal(|ui| {
+            ui.set_min_height(34.0);
+
+            if ui
+                .button("‹")
+                .on_hover_text(self.tr("common.close"))
+                .clicked()
+            {
+                self.page = Page::Library;
+            }
+
+            if ui
+                .add_enabled(
+                    previous_enabled,
+                    egui::Button::new("←"),
+                )
+                .on_hover_text(self.tr("common.previous"))
+                .clicked()
+            {
+                self.move_song(-1);
+            }
+
+            let title = self.title_for_song(&song);
+            let heading = format!("{}  ·  {}", song.display_number(), title);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(heading)
+                        .strong()
+                        .color(self.palette().get("text_primary")),
+                )
+                .truncate(),
+            );
+
+            if ui
+                .add_enabled(next_enabled, egui::Button::new("→"))
+                .on_hover_text(self.tr("common.next"))
+                .clicked()
+            {
+                self.move_song(1);
+            }
+
+            ui.separator();
+
+            let is_favorite = self.favorites.contains(&song.id);
+            if ui
+                .button(if is_favorite { "★" } else { "☆" })
+                .on_hover_text(if is_favorite {
+                    self.tr("status.favorite_removed")
+                } else {
+                    self.tr("status.favorite_added")
+                })
+                .clicked()
+            {
+                self.toggle_favorite(&song.id);
+            }
+
+            if ui
+                .selectable_label(false, self.tr("reader.text"))
+                .on_hover_text(self.tr("reader.text"))
+                .clicked()
+            {
+                self.set_viewer_mode(ViewerMode::Text);
+            }
+
+            if ui
+                .button("⌕")
+                .on_hover_text(self.tr("search.placeholder"))
+                .clicked()
+            {
+                self.pdf_search_open = true;
+                self.search_id = Some(Id::new("miredo-pdf-search"));
+            }
+
+            ui.separator();
+
+            if ui
+                .button("−")
+                .on_hover_text(self.tr("reader.zoom_out"))
+                .clicked()
+            {
+                self.change_zoom(-0.1);
+            }
+            ui.label(format!("{:.0}%", self.zoom * 100.0));
+            if ui
+                .button("+")
+                .on_hover_text(self.tr("reader.zoom_in"))
+                .clicked()
+            {
+                self.change_zoom(0.1);
+            }
+
+            ui.separator();
+
+            let total_pages = self.pdf_page_counts.get(&song.id).copied();
+            if ui
+                .add_enabled(self.pdf_page > 1, egui::Button::new("‹"))
+                .on_hover_text(self.tr("common.previous"))
+                .clicked()
+            {
+                self.set_pdf_page(&song.id, self.pdf_page.saturating_sub(1));
+            }
+
+            ui.label(
+                total_pages
+                    .map(|total| format!("{} {}/{}", self.tr("reader.page"), self.pdf_page, total))
+                    .unwrap_or_else(|| format!("{} {}", self.tr("reader.page"), self.pdf_page)),
+            );
+
+            if ui
+                .add_enabled(
+                    total_pages.is_none_or(|total| self.pdf_page < total),
+                    egui::Button::new("›"),
+                )
+                .on_hover_text(self.tr("common.next"))
+                .clicked()
+            {
+                self.set_pdf_page(&song.id, self.pdf_page + 1);
+            }
+
+            let mut list_to_add = None;
+            ui.menu_button("⋯", |ui| {
+                ui.label(RichText::new(self.tr("reader.add_to_list")).strong());
+
+                let mut selected_list_id = self.selected_playlist_id.clone();
+                egui::ComboBox::from_id_salt("immersive-reader-list")
+                    .selected_text(
+                        selected_list_id
+                            .as_ref()
+                            .and_then(|id| self.playlists.iter().find(|p| &p.id == id))
+                            .map(|p| p.name.clone())
+                            .unwrap_or_else(|| self.tr("reader.select_list")),
+                    )
+                    .show_ui(ui, |ui| {
+                        for playlist in &self.playlists {
+                            ui.selectable_value(
+                                &mut selected_list_id,
+                                Some(playlist.id.clone()),
+                                &playlist.name,
+                            );
+                        }
+                    });
+
+                if ui.button(self.tr("reader.add_to_list")).clicked() {
+                    list_to_add = selected_list_id;
+                    ui.close();
+                }
+
+                if ui.button(self.tr("reader.fullscreen")).clicked() {
+                    self.fullscreen = !self.fullscreen;
+                    context.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
+                    ui.close();
+                }
+            });
+            if let Some(playlist_id) = list_to_add {
+                let already_added = self
+                    .playlists
+                    .iter()
+                    .find(|playlist| playlist.id == playlist_id)
+                    .is_some_and(|playlist| playlist.song_ids.contains(&song.id));
+                if already_added {
+                    self.set_status(self.tr("reader.already_added"));
+                } else {
+                    match self.storage.add_song_to_playlist(&playlist_id, &song.id) {
+                        Ok(()) => {
+                            self.refresh_user_data();
+                            self.set_status(self.tr("reader.added"));
+                        }
+                        Err(error) => self.show_error(error),
+                    }
+                }
+            }
+
+            if ui
+                .button("⛶")
+                .on_hover_text(self.tr("reader.fullscreen"))
+                .clicked()
+            {
+                self.fullscreen = !self.fullscreen;
+                context.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
+            }
+        });
+
+        if self.pdf_search_open {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("⌕")
+                        .color(self.palette().get("text_muted")),
+                );
+                let response = ui.add_sized(
+                    [320.0, 30.0],
+                    egui::TextEdit::singleline(&mut self.query)
+                        .id_salt("miredo-pdf-search")
+                        .hint_text(self.tr("search.placeholder")),
+                );
+                self.search_id = Some(response.id);
+                if ui.button("×").clicked() {
+                    self.query.clear();
+                    self.pdf_search_open = false;
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        self.visible_ids(false, None).len(),
+                        self.tr("search.results")
+                    ))
+                    .size(11.0)
+                    .color(self.palette().get("text_muted")),
+                );
+            });
+
+            if !self.query.is_empty() {
+                let result_ids = self.visible_ids(false, None);
+                let navigation_ids = result_ids.clone();
+                let mut open_id = None;
+                ScrollArea::horizontal()
+                    .id_salt("miredo-pdf-search-results")
+                    .auto_shrink([false, false])
+                    .max_height(38.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for song_id in result_ids.iter().take(8) {
+                                if let Some(result_song) = self.song(song_id) {
+                                    let label = format!(
+                                        "{} · {}",
+                                        result_song.display_number(),
+                                        self.title_for_song(result_song)
+                                    );
+                                    if ui
+                                        .selectable_label(false, label)
+                                        .clicked()
+                                    {
+                                        open_id = Some(song_id.clone());
+                                    }
+                                }
+                            }
+                        });
+                    });
+                if let Some(song_id) = open_id {
+                    self.open_song(song_id, navigation_ids);
+                    self.pdf_search_open = false;
+                }
+            }
+        }
+
+        ui.add_space(2.0);
+        self.draw_pdf_canvas_immersive(context, ui, &song);
+    }
+
+    fn draw_pdf_canvas_immersive(
+        &mut self,
+        context: &EguiContext,
+        ui: &mut egui::Ui,
+        song: &Song,
+    ) {
+        let total_pages = self.pdf_page_counts.get(&song.id).copied();
+        let pages = if self.pdf_layout == PdfLayout::Double {
+            vec![self.pdf_page, self.pdf_page + 1]
+        } else {
+            vec![self.pdf_page]
+        };
+
+        for page in &pages {
+            if total_pages.is_none_or(|total| *page <= total) {
+                self.request_pdf_page(song, *page);
+            }
+        }
+
+        // Préchargement discret de la page voisine pour rendre précédent/suivant immédiat.
+        for adjacent in [
+            self.pdf_page.saturating_sub(1),
+            self.pdf_page + 1,
+            self.pdf_page + 2,
+        ] {
+            if adjacent >= 1 && total_pages.is_none_or(|total| adjacent <= total) {
+                self.request_pdf_page(song, adjacent);
+            }
+        }
+
+        ScrollArea::both()
+            .id_salt("miredo-pdf-immersive")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let available = ui.available_size();
+
+                if pages.len() == 2 {
+                    let gap = 8.0_f32;
+                    let page_width = ((available.x - gap) / 2.0).max(1.0);
+                    ui.horizontal_centered(|ui| {
+                        self.draw_pdf_page(ui, &song.id, pages[0], page_width, available.y);
+                        ui.add_space(gap);
+                        self.draw_pdf_page(ui, &song.id, pages[1], page_width, available.y);
+                    });
+                } else {
+                    self.draw_pdf_page(
+                        ui,
+                        &song.id,
+                        pages[0],
+                        available.x.max(1.0),
+                        available.y.max(1.0),
+                    );
+                }
+            });
+    }
+
     fn draw_reader(&mut self, context: &EguiContext, ui: &mut egui::Ui) {
         let Some(song) = self.current_song().cloned() else {
             ui.label(self.tr("search.empty"));
@@ -1197,8 +1527,7 @@ impl MiReDoApp {
                 let is_favorite = self.favorites.contains(&song.id);
                 if ui
                     .button(if is_favorite { "★" } else { "☆" })
-                    .on_hover_text(if is_favorite {
-                        self.tr("status.favorite_removed")
+                    .on_hover_text(if is_favorite {                        self.tr("status.favorite_removed")
                     } else {
                         self.tr("status.favorite_added")
                     })
@@ -1487,18 +1816,17 @@ impl MiReDoApp {
         let key = pdf::page_key(song_id, page, self.zoom);
         if let Some(texture) = self.pdf_textures.get(&key) {
             let size = texture.size_vec2();
-            let scale = (max_width / size.x)
+            let fit_scale = (max_width / size.x)
                 .min(max_height / size.y)
-                .min(1.0)
-                .max(0.1);
+                .max(0.01);
+            let scale = (fit_scale * self.zoom).clamp(0.1, 4.0);
             ui.centered_and_justified(|ui| {
                 ui.image((texture.id(), size * scale));
             });
         } else if self.pdf_pending.contains(&key) {
             ui.centered_and_justified(|ui| {
                 ui.label(self.tr("common.loading"));
-            });
-        } else if self.pdf_errors.contains_key(&key) {
+            });        } else if self.pdf_errors.contains_key(&key) {
             ui.centered_and_justified(|ui| {
                 ui.label(self.tr("reader.pdf_error"));
             });
@@ -1797,8 +2125,7 @@ impl MiReDoApp {
                         .clone()
                         .context("Aucune liste sélectionnée")
                         .and_then(|id| self.storage.rename_playlist(&id, &name))
-                };
-                match result {
+                };                match result {
                     Ok(()) => {
                         self.playlist_dialog = None;
                         self.dialog_error = None;
@@ -1821,17 +2148,31 @@ impl eframe::App for MiReDoApp {
         self.poll_pdf(context);
         self.handle_shortcuts(context);
         self.apply_theme(context);
-        self.draw_sidebar(context);
+
+        let immersive_pdf = self.page == Page::Reader && self.viewer_mode == ViewerMode::Pdf;
+        if !immersive_pdf {
+            self.draw_sidebar(context);
+        }
+
+        let frame = if immersive_pdf {
+            egui::Frame::new()
+                .fill(self.palette().get("viewer_background"))
+                .inner_margin(egui::Margin::ZERO)
+        } else {
+            egui::Frame::new()
+                .fill(self.palette().get("background"))
+                .inner_margin(egui::Margin::same(22))
+        };
 
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(self.palette().get("background"))
-                    .inner_margin(egui::Margin::same(22)),
-            )
+            .frame(frame)
             .show(context, |ui| {
-                self.draw_topbar(ui);
-                self.draw_page(context, ui);
+                if immersive_pdf {
+                    self.draw_pdf_reader_immersive(context, ui);
+                } else {
+                    self.draw_topbar(ui);
+                    self.draw_page(context, ui);
+                }
             });
 
         self.draw_playlist_dialog(context);
