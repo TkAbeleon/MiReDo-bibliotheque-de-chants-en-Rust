@@ -1358,6 +1358,13 @@ impl MiReDoApp {
 
         if self.pdf_search_open {
             ui.add_space(2.0);
+
+            // Préparer les valeurs avant d'emprunter self.query mutuellement
+            // dans TextEdit. Cela évite le conflit E0502 du borrow-checker.
+            let search_placeholder = self.tr("search.placeholder");
+            let results_label = self.tr("search.results");
+            let result_count = self.visible_ids(false, None).len();
+
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("⌕")
@@ -1367,7 +1374,7 @@ impl MiReDoApp {
                     [320.0, 30.0],
                     egui::TextEdit::singleline(&mut self.query)
                         .id_salt("miredo-pdf-search")
-                        .hint_text(self.tr("search.placeholder")),
+                        .hint_text(search_placeholder),
                 );
                 self.search_id = Some(response.id);
                 if ui.button("×").clicked() {
@@ -1375,13 +1382,9 @@ impl MiReDoApp {
                     self.pdf_search_open = false;
                 }
                 ui.label(
-                    RichText::new(format!(
-                        "{} {}",
-                        self.visible_ids(false, None).len(),
-                        self.tr("search.results")
-                    ))
-                    .size(11.0)
-                    .color(self.palette().get("text_muted")),
+                    RichText::new(format!("{result_count} {results_label}"))
+                        .size(11.0)
+                        .color(self.palette().get("text_muted")),
                 );
             });
 
@@ -1420,12 +1423,11 @@ impl MiReDoApp {
         }
 
         ui.add_space(2.0);
-        self.draw_pdf_canvas_immersive(context, ui, &song);
+        self.draw_pdf_canvas_immersive(ui, &song);
     }
 
     fn draw_pdf_canvas_immersive(
         &mut self,
-        context: &EguiContext,
         ui: &mut egui::Ui,
         song: &Song,
     ) {
