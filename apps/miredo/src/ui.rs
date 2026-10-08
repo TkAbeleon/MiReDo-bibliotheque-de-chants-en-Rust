@@ -85,6 +85,34 @@ enum PdfLayout {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PdfFitMode {
+    FitScreen,
+    FitWidth,
+    FitHeight,
+    Manual,
+}
+
+impl PdfFitMode {
+    fn from_preference(value: Option<String>) -> Self {
+        match value.as_deref() {
+            Some("width") => Self::FitWidth,
+            Some("height") => Self::FitHeight,
+            Some("manual") => Self::Manual,
+            _ => Self::FitScreen,
+        }
+    }
+
+    fn preference(self) -> &'static str {
+        match self {
+            Self::FitScreen => "screen",
+            Self::FitWidth => "width",
+            Self::FitHeight => "height",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PlaylistDialog {
     Create,
     Rename,
@@ -106,6 +134,7 @@ pub struct MiReDoApp {
     page: Page,
     viewer_mode: ViewerMode,
     pdf_layout: PdfLayout,
+    pdf_fit_mode: PdfFitMode,
     zoom: f32,
     query: String,
     search_id: Option<Id>,
@@ -151,6 +180,7 @@ impl MiReDoApp {
         } else {
             PdfLayout::Single
         };
+        let pdf_fit_mode = PdfFitMode::from_preference(storage.preference("pdf_fit_mode")?);
         let zoom = storage
             .preference("pdf_zoom")?
             .and_then(|value| value.parse::<f32>().ok())
@@ -182,6 +212,7 @@ impl MiReDoApp {
             page: Page::Home,
             viewer_mode,
             pdf_layout,
+            pdf_fit_mode,
             zoom,
             query: String::new(),
             search_id: None,
@@ -354,7 +385,8 @@ impl MiReDoApp {
     }
 
     fn request_pdf_page(&mut self, song: &Song, page: usize) {
-        let key = pdf::page_key(&song.id, page, self.zoom);
+        let render_zoom = self.pdf_render_zoom();
+        let key = pdf::page_key(&song.id, page, render_zoom);
         if self.pdf_textures.contains_key(&key) || !self.pdf_pending.insert(key.clone()) {
             return;
         }
@@ -366,7 +398,7 @@ impl MiReDoApp {
             self.pdf_sender.clone(),
             song.id.clone(),
             page,
-            self.zoom,
+            render_zoom,
             path,
             self.pdf_cache_dir.clone(),
         );
@@ -473,13 +505,53 @@ impl MiReDoApp {
         }
     }
 
+    fn set_pdf_fit_mode(&mut self, mode: PdfFitMode) {
+        self.pdf_fit_mode = mode;
+        if let Err(error) = self
+            .storage
+            .set_preference("pdf_fit_mode", mode.preference())
+        {
+            self.show_error(error);
+        }
+        self.pdf_textures.clear();
+        self.pdf_pending.clear();
+        self.pdf_errors.clear();
+    }
+
     fn change_zoom(&mut self, delta: f32) {
+        if self.pdf_fit_mode != PdfFitMode::Manual {
+            self.pdf_fit_mode = PdfFitMode::Manual;
+            let _ = self
+                .storage
+                .set_preference("pdf_fit_mode", PdfFitMode::Manual.preference());
+        }
         self.zoom = (self.zoom + delta).clamp(0.5, 3.0);
         if let Err(error) = self
             .storage
             .set_preference("pdf_zoom", &self.zoom.to_string())
         {
             self.show_error(error);
+        }
+        self.pdf_textures.clear();
+        self.pdf_pending.clear();
+        self.pdf_errors.clear();
+    }
+
+    fn set_pdf_layout(&mut self, layout: PdfLayout) {
+        self.pdf_layout = layout;
+        if layout == PdfLayout::Double && self.pdf_page > 1 && self.pdf_page % 2 == 0 {
+            self.pdf_page -= 1;
+        }
+        let value = if layout == PdfLayout::Double { "double" } else { "single" };
+        if let Err(error) = self.storage.set_preference("pdf_layout", value) {
+            self.show_error(error);
+        }
+    }
+
+    fn pdf_render_zoom(&self) -> f32 {
+        match self.pdf_fit_mode {
+            PdfFitMode::Manual => self.zoom.max(0.5),
+            PdfFitMode::FitScreen | PdfFitMode::FitWidth | PdfFitMode::FitHeight => 2.0,
         }
     }
 
@@ -1268,29 +1340,114 @@ impl MiReDoApp {
             ui.separator();
 
             let total_pages = self.pdf_page_counts.get(&song.id).copied();
+            let is_book = self.pdf_layout == PdfLayout::Double;
+            let step = if is_book { 2 } else { 1 };
+            let current_start = if is_book && self.pdf_page > 1 && self.pdf_page % 2 == 0 {
+                self.pdf_page - 1
+            } else {
+                self.pdf_page
+            };
+            let next_start = current_start.saturating_add(step);
+
             if ui
-                .add_enabled(self.pdf_page > 1, egui::Button::new("‹"))
+                .add_enabled(current_start > 1, egui::Button::new("‹"))
                 .on_hover_text(self.tr("common.previous"))
                 .clicked()
             {
-                self.set_pdf_page(&song.id, self.pdf_page.saturating_sub(1));
+                self.set_pdf_page(&song.id, current_start.saturating_sub(step).max(1));
             }
 
             ui.label(
                 total_pages
-                    .map(|total| format!("{} {}/{}", self.tr("reader.page"), self.pdf_page, total))
-                    .unwrap_or_else(|| format!("{} {}", self.tr("reader.page"), self.pdf_page)),
+                    .map(|total| {
+                        if is_book && current_start < total {
+                            format!("{} {}–{} / {}", self.tr("reader.page"), current_start, (current_start + 1).min(total), total)
+                        } else {
+                            format!("{} {} / {}", self.tr("reader.page"), current_start, total)
+                        }
+                    })
+                    .unwrap_or_else(|| format!("{} {}", self.tr("reader.page"), current_start)),
             );
 
             if ui
                 .add_enabled(
-                    total_pages.is_none_or(|total| self.pdf_page < total),
+                    total_pages.is_none_or(|total| next_start <= total),
                     egui::Button::new("›"),
                 )
                 .on_hover_text(self.tr("common.next"))
                 .clicked()
             {
-                self.set_pdf_page(&song.id, self.pdf_page + 1);
+                self.set_pdf_page(&song.id, next_start);
+            }
+
+            ui.separator();
+
+            ui.menu_button("Aa", |ui| {
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitScreen, self.tr("reader.fit_screen"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::FitScreen);
+                    ui.close();
+                }
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitWidth, self.tr("reader.fit_width"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::FitWidth);
+                    ui.close();
+                }
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitHeight, self.tr("reader.fit_height"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::FitHeight);
+                    ui.close();
+                }
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::Manual, self.tr("reader.manual_zoom"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::Manual);
+                    ui.close();
+                }
+            });
+
+            ui.label(match self.pdf_fit_mode {
+                PdfFitMode::FitScreen => self.tr("reader.fit_screen_short"),
+                PdfFitMode::FitWidth => self.tr("reader.fit_width_short"),
+                PdfFitMode::FitHeight => self.tr("reader.fit_height_short"),
+                PdfFitMode::Manual => format!("{:.0}%", self.zoom * 100.0),
+            });
+
+            if ui
+                .button("−")
+                .on_hover_text(self.tr("reader.zoom_out"))
+                .clicked()
+            {
+                self.change_zoom(-0.1);
+            }
+            if ui
+                .button("+")
+                .on_hover_text(self.tr("reader.zoom_in"))
+                .clicked()
+            {
+                self.change_zoom(0.1);
+            }
+
+            ui.separator();
+
+            if ui
+                .selectable_label(self.pdf_layout == PdfLayout::Single, self.tr("reader.single_page"))
+                .clicked()
+            {
+                self.set_pdf_layout(PdfLayout::Single);
+            }
+            if ui
+                .selectable_label(self.pdf_layout == PdfLayout::Double, self.tr("reader.book_mode"))
+                .clicked()
+            {
+                self.set_pdf_layout(PdfLayout::Double);
             }
 
             let mut list_to_add = None;
@@ -1432,10 +1589,19 @@ impl MiReDoApp {
         song: &Song,
     ) {
         let total_pages = self.pdf_page_counts.get(&song.id).copied();
-        let pages = if self.pdf_layout == PdfLayout::Double {
-            vec![self.pdf_page, self.pdf_page + 1]
+        let first_page = if self.pdf_layout == PdfLayout::Double
+            && self.pdf_page > 1
+            && self.pdf_page % 2 == 0
+        {
+            self.pdf_page - 1
         } else {
-            vec![self.pdf_page]
+            self.pdf_page
+        };
+
+        let pages = if self.pdf_layout == PdfLayout::Double {
+            vec![first_page, first_page + 1]
+        } else {
+            vec![first_page]
         };
 
         for page in &pages {
@@ -1465,17 +1631,17 @@ impl MiReDoApp {
                     let gap = 8.0_f32;
                     let page_width = ((available.x - gap) / 2.0).max(1.0);
                     ui.horizontal_centered(|ui| {
-                        self.draw_pdf_page(ui, &song.id, pages[0], page_width, available.y);
+                        let page_available = Vec2::new(page_width, available.y.max(1.0));
+                        self.draw_pdf_page(ui, &song.id, pages[0], page_available);
                         ui.add_space(gap);
-                        self.draw_pdf_page(ui, &song.id, pages[1], page_width, available.y);
+                        self.draw_pdf_page(ui, &song.id, pages[1], page_available);
                     });
                 } else {
                     self.draw_pdf_page(
                         ui,
                         &song.id,
                         pages[0],
-                        available.x.max(1.0),
-                        available.y.max(1.0),
+                        Vec2::new(available.x.max(1.0), available.y.max(1.0)),
                     );
                 }
             });
@@ -1734,22 +1900,16 @@ impl MiReDoApp {
                 )
                 .clicked()
             {
-                self.pdf_layout = PdfLayout::Single;
-                if let Err(error) = self.storage.set_preference("pdf_layout", "single") {
-                    self.show_error(error);
-                }
+                self.set_pdf_layout(PdfLayout::Single);
             }
             if ui
                 .selectable_label(
                     self.pdf_layout == PdfLayout::Double,
-                    self.tr("reader.double_page"),
+                    self.tr("reader.book_mode"),
                 )
                 .clicked()
             {
-                self.pdf_layout = PdfLayout::Double;
-                if let Err(error) = self.storage.set_preference("pdf_layout", "double") {
-                    self.show_error(error);
-                }
+                self.set_pdf_layout(PdfLayout::Double);
             }
             if ui
                 .button("⛶")
@@ -1812,25 +1972,29 @@ impl MiReDoApp {
         ui: &mut egui::Ui,
         song_id: &str,
         page: usize,
-        max_width: f32,
-        _max_height: f32,
+        available: Vec2,
     ) {
-        let key = pdf::page_key(song_id, page, self.zoom);
+        let render_zoom = self.pdf_render_zoom();
+        let key = pdf::page_key(song_id, page, render_zoom);
         if let Some(texture) = self.pdf_textures.get(&key) {
             let size = texture.size_vec2();
+            let logical_size = size / render_zoom.max(0.01);
 
-            // Les pages sont rendues à une résolution qui suit le zoom.
-            // On reconstruit la taille logique de base afin que le zoom
-            // ne soit pas appliqué deux fois.
-            let logical_size = size / self.zoom.max(0.01);
-            let fit_width = (max_width / logical_size.x).max(0.01);
-            let scale = (fit_width * self.zoom).clamp(0.1, 6.0);
+            let scale = match self.pdf_fit_mode {
+                PdfFitMode::FitScreen => {
+                    (available.x / logical_size.x)
+                        .min(available.y / logical_size.y)
+                        .clamp(0.1, 6.0)
+                }
+                PdfFitMode::FitWidth => (available.x / logical_size.x).clamp(0.1, 6.0),
+                PdfFitMode::FitHeight => (available.y / logical_size.y).clamp(0.1, 6.0),
+                PdfFitMode::Manual => self.zoom.clamp(0.1, 6.0),
+            };
 
-            // Priorité à la largeur disponible : pour une partition,
-            // une lecture plus grande avec défilement vertical est préférable
-            // à une page artificiellement réduite pour tenir en hauteur.
-            ui.vertical_centered(|ui| {
-                ui.image((texture.id(), size * scale));
+            let display_size = logical_size * scale;
+            ui.vertical(|ui| {
+                ui.set_min_width(display_size.x);
+                ui.image((texture.id(), display_size));
             });
         } else if self.pdf_pending.contains(&key) {
             ui.centered_and_justified(|ui| {
@@ -1891,18 +2055,16 @@ impl MiReDoApp {
                     )
                     .clicked()
                 {
-                    self.pdf_layout = PdfLayout::Single;
-                    let _ = self.storage.set_preference("pdf_layout", "single");
+                    self.set_pdf_layout(PdfLayout::Single);
                 }
                 if ui
                     .selectable_label(
                         self.pdf_layout == PdfLayout::Double,
-                        self.tr("reader.double_page"),
+                        self.tr("reader.book_mode"),
                     )
                     .clicked()
                 {
-                    self.pdf_layout = PdfLayout::Double;
-                    let _ = self.storage.set_preference("pdf_layout", "double");
+                    self.set_pdf_layout(PdfLayout::Double);
                 }
             });
             ui.horizontal(|ui| {
@@ -1913,6 +2075,35 @@ impl MiReDoApp {
                 ui.label(format!("{:.0}%", self.zoom * 100.0));
                 if ui.button("+").clicked() {
                     self.change_zoom(0.1);
+                }
+            });
+
+            ui.add_space(18.0);
+            self.settings_section(ui, "settings.pdf_fit");
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitScreen, self.tr("reader.fit_screen"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::FitScreen);
+                }
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitWidth, self.tr("reader.fit_width"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::FitWidth);
+                }
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitHeight, self.tr("reader.fit_height"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::FitHeight);
+                }
+                if ui
+                    .selectable_label(self.pdf_fit_mode == PdfFitMode::Manual, self.tr("reader.manual_zoom"))
+                    .clicked()
+                {
+                    self.set_pdf_fit_mode(PdfFitMode::Manual);
                 }
             });
 
