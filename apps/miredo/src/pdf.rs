@@ -71,7 +71,7 @@ fn render_page(path: &Path, page: usize, zoom: f32, cache_dir: &Path) -> Result<
     let png_path = output_prefix.with_extension("png");
 
     if !png_path.is_file() {
-        let dpi = (96.0 * zoom).round().clamp(54.0, 240.0) as u32;
+        let dpi = (96.0 * zoom).round().clamp(72.0, 300.0) as u32;
         let output = Command::new("pdftoppm")
             .arg("-f")
             .arg(page.to_string())
