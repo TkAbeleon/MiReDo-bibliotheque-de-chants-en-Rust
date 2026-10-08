@@ -1610,41 +1610,114 @@ impl MiReDoApp {
             }
         }
 
-        // Préchargement discret de la page voisine pour rendre précédent/suivant immédiat.
+        // Préchargement discret des pages voisines pour rendre précédent/suivant immédiat.
         for adjacent in [
-            self.pdf_page.saturating_sub(1),
-            self.pdf_page + 1,
-            self.pdf_page + 2,
+            first_page.saturating_sub(1),
+            first_page + 1,
+            first_page + 2,
         ] {
             if adjacent >= 1 && total_pages.is_none_or(|total| adjacent <= total) {
                 self.request_pdf_page(song, adjacent);
             }
         }
 
+        let available = ui.available_size().max(Vec2::splat(1.0));
+
+        // Le mode par défaut est réellement "page entière" :
+        // aucun ScrollArea n'est créé, donc aucune barre de défilement n'apparaît.
+        if self.pdf_fit_mode == PdfFitMode::FitScreen {
+            self.draw_pdf_fit_screen(ui, &song.id, &pages, available);
+            return;
+        }
+
         ScrollArea::both()
             .id_salt("miredo-pdf-immersive")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let available = ui.available_size();
-
                 if pages.len() == 2 {
                     let gap = 8.0_f32;
                     let page_width = ((available.x - gap) / 2.0).max(1.0);
+                    let page_available = Vec2::new(page_width, available.y);
                     ui.horizontal_centered(|ui| {
-                        let page_available = Vec2::new(page_width, available.y.max(1.0));
                         self.draw_pdf_page(ui, &song.id, pages[0], page_available);
                         ui.add_space(gap);
                         self.draw_pdf_page(ui, &song.id, pages[1], page_available);
                     });
                 } else {
-                    self.draw_pdf_page(
-                        ui,
-                        &song.id,
-                        pages[0],
-                        Vec2::new(available.x.max(1.0), available.y.max(1.0)),
-                    );
+                    self.draw_pdf_page(ui, &song.id, pages[0], available);
                 }
             });
+    }
+
+    fn draw_pdf_fit_screen(
+        &self,
+        ui: &mut egui::Ui,
+        song_id: &str,
+        pages: &[usize],
+        available: Vec2,
+    ) {
+        const GAP: f32 = 8.0;
+
+        let render_zoom = self.pdf_render_zoom();
+        let textures = pages
+            .iter()
+            .map(|page| {
+                let key = pdf::page_key(song_id, *page, render_zoom);
+                self.pdf_textures
+                    .get(&key)
+                    .map(|texture| (texture, texture.size_vec2() / render_zoom.max(0.01)))
+            })
+            .collect::<Vec<_>>();
+
+        if textures.iter().any(|item| item.is_none()) {
+            ui.centered_and_justified(|ui| {
+                if self.pdf_errors.values().next().is_some() {
+                    ui.label(self.tr("reader.pdf_error"));
+                } else {
+                    ui.label(self.tr("common.loading"));
+                }
+            });
+            return;
+        }
+
+        let textures = textures
+            .into_iter()
+            .map(Option::unwrap)
+            .collect::<Vec<_>>();
+
+        let scale = if pages.len() == 1 {
+            let logical = textures[0].1;
+            (available.x / logical.x)
+                .min(available.y / logical.y)
+                .clamp(0.01, 6.0)
+        } else {
+            let total_width = textures.iter().map(|(_, size)| size.x).sum::<f32>() + GAP;
+            let max_height = textures
+                .iter()
+                .map(|(_, size)| size.y)
+                .fold(0.0_f32, f32::max);
+
+            (available.x / total_width)
+                .min(available.y / max_height)
+                .clamp(0.01, 6.0)
+        };
+
+        if pages.len() == 1 {
+            let (texture, logical_size) = textures[0];
+            let display_size = logical_size * scale;
+            ui.vertical_centered(|ui| {
+                ui.image((texture.id(), display_size));
+            });
+        } else {
+            ui.horizontal_centered(|ui| {
+                for (index, (texture, logical_size)) in textures.iter().enumerate() {
+                    ui.image((texture.id(), *logical_size * scale));
+                    if index + 1 < textures.len() {
+                        ui.add_space(GAP);
+                    }
+                }
+            });
+        }
     }
 
     fn draw_reader(&mut self, context: &EguiContext, ui: &mut egui::Ui) {
