@@ -65,7 +65,7 @@
     "reader.of": "sur",
     "reader.zoom_out": "Réduire le zoom",
     "reader.zoom_in": "Augmenter le zoom",
-    "reader.fit_width": "Ajuster à la largeur",
+    "reader.fit_width": "Adapter à la largeur",
     "reader.single_page": "Page simple",
     "reader.double_page": "Double page",
     "reader.fullscreen": "Plein écran",
@@ -143,7 +143,15 @@
     "status.list_created": "Liste créée",
     "status.list_updated": "Liste mise à jour",
     "status.list_deleted": "Liste supprimée",
-    "status.song_removed": "Chant retiré de la liste"
+    "status.song_removed": "Chant retiré de la liste",
+    "reader.fit_screen": "Adapter à l’écran",
+    "reader.fit_height": "Adapter à la hauteur",
+    "reader.manual_zoom": "Zoom manuel",
+    "reader.fit_screen_short": "Écran",
+    "reader.fit_width_short": "Largeur",
+    "reader.fit_height_short": "Hauteur",
+    "reader.book_mode": "Mode livre",
+    "settings.pdf_fit": "Adaptation de la partition"
   },
   "mg": {
     "app.name": "MiReDo",
@@ -211,7 +219,7 @@
     "reader.of": "amin’ny",
     "reader.zoom_out": "Ahena ny habeny",
     "reader.zoom_in": "Ampitomboina ny habeny",
-    "reader.fit_width": "Ampifanaraho amin’ny sakany",
+    "reader.fit_width": "Hifanaraka amin’ny sakany",
     "reader.single_page": "Pejy tokana",
     "reader.double_page": "Pejy roa",
     "reader.fullscreen": "Efijery manontolo",
@@ -289,7 +297,15 @@
     "status.list_created": "Voaforona ny lisitra",
     "status.list_updated": "Nohavaozina ny lisitra",
     "status.list_deleted": "Voafafa ny lisitra",
-    "status.song_removed": "Nesorina tao amin’ny lisitra ny hira"
+    "status.song_removed": "Nesorina tao amin’ny lisitra ny hira",
+    "reader.fit_screen": "Hifanaraka amin’ny efijery",
+    "reader.fit_height": "Hifanaraka amin’ny haavony",
+    "reader.manual_zoom": "Fanamafisana tanana",
+    "reader.fit_screen_short": "Efijery",
+    "reader.fit_width_short": "Sakany",
+    "reader.fit_height_short": "Haavony",
+    "reader.book_mode": "Fomba boky",
+    "settings.pdf_fit": "Fifanarahana amin’ny efijery"
   },
   "en": {
     "app.name": "MiReDo",
@@ -357,7 +373,7 @@
     "reader.of": "of",
     "reader.zoom_out": "Zoom out",
     "reader.zoom_in": "Zoom in",
-    "reader.fit_width": "Fit width",
+    "reader.fit_width": "Fit to width",
     "reader.single_page": "Single page",
     "reader.double_page": "Two pages",
     "reader.fullscreen": "Fullscreen",
@@ -435,6 +451,14 @@
     "status.list_created": "List created",
     "status.list_updated": "List updated",
     "status.list_deleted": "List deleted",
-    "status.song_removed": "Song removed from the list"
+    "status.song_removed": "Song removed from the list",
+    "reader.fit_screen": "Fit to screen",
+    "reader.fit_height": "Fit to height",
+    "reader.manual_zoom": "Manual zoom",
+    "reader.fit_screen_short": "Screen",
+    "reader.fit_width_short": "Width",
+    "reader.fit_height_short": "Height",
+    "reader.book_mode": "Book mode",
+    "settings.pdf_fit": "Score fitting"
   }
 }
