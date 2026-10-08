@@ -551,7 +551,7 @@ impl MiReDoApp {
     fn pdf_render_zoom(&self) -> f32 {
         match self.pdf_fit_mode {
             PdfFitMode::Manual => self.zoom.max(0.5),
-            PdfFitMode::FitScreen | PdfFitMode::FitWidth | PdfFitMode::FitHeight => 2.0,
+            PdfFitMode::FitScreen | PdfFitMode::FitWidth | PdfFitMode::FitHeight => 3.0,
         }
     }
 
@@ -1948,8 +1948,7 @@ impl MiReDoApp {
                                         &mut columns[index],
                                         &song.id,
                                         *page,
-                                        available.x / 2.0,
-                                        available.y,
+                                        Vec2::new((available.x / 2.0).max(1.0), available.y.max(1.0)),
                                     );
                                 }
                             });
@@ -1958,8 +1957,7 @@ impl MiReDoApp {
                                 ui,
                                 &song.id,
                                 self.pdf_page,
-                                available.x,
-                                available.y,
+                                Vec2::new(available.x.max(1.0), available.y.max(1.0)),
                             );
                         }
                     });
