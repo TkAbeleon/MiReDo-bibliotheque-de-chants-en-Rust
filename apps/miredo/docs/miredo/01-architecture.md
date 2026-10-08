@@ -185,7 +185,60 @@ Erreurs typées :
 
 L'UI traduit une erreur technique en message utilisateur compréhensible.
 
-## 11. Observabilité
+## 11. Moteur PDF et architecture de rendu
+
+MiReDo doit rester compatible avec une architecture de lecture PDF asynchrone, sans dépendance à une bibliothèque native système. Le moteur PDF est un composant d'infrastructure, pas une couche UI.
+
+Le candidat principal est Hayro (`hayro = "0.8.0"`), avec `pdfboss-render = "2.13.1"` comme deuxième benchmark.
+
+### Bloc de conception
+
+~~~rust
+trait PdfEngine {
+    fn open(&mut self, path: &std::path::Path) -> anyhow::Result<()>;
+    fn page_count(&self) -> anyhow::Result<usize>;
+    fn page_size(&self, page: usize) -> anyhow::Result<[u32; 2]>;
+    fn render_page(
+        &mut self,
+        page: usize,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<crate::pdf::RenderedPage>;
+    fn extract_text(&self, page: usize) -> anyhow::Result<String>;
+}
+~~~
+
+L'implémentation derrière cette interface doit respecter les contraintes suivantes :
+
+- 100 % Rust, sans `pdfium-render`, `MuPDF`, `Poppler`, `pdftoppm`, `pdfinfo` ni autre binding C/C++ ;
+- ouverture du document une seule fois ;
+- document conservé en mémoire ;
+- pages rendues hors thread UI ;
+- cache mémoire local pour la page courante / précédente / suivante ;
+- rendu adaptatif selon taille du viewport et zoom ;
+- interface de lecture indépendante de l'implémentation technique ;
+- benchmark sur les PDFs réels dans `apps/miredo/data/` avant choix final.
+
+### Critères de sélection
+
+Le moteur retenu doit être choisi après validation réelle sur les critères suivants :
+
+1. compilation Rust stable ;
+2. ouverture des PDFs du dépôt ;
+3. rendu des partitions ;
+4. rendu des lignes musicales ;
+5. texte et paroles ;
+6. proportions ;
+7. annotations ;
+8. vitesse ;
+9. mémoire ;
+10. compatibilité Linux ;
+11. possibilité Windows / macOS ;
+12. licence compatible.
+
+Le moteur ne doit pas être décisionné uniquement sur la réputation, mais sur la mesure sur les documents MiReDo.
+
+## 12. Observabilité
 
 Niveaux recommandés :
 

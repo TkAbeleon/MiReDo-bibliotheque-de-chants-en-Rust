@@ -11,7 +11,56 @@ cargo run --manifest-path apps/miredo/Cargo.toml
 cargo test --manifest-path apps/miredo/Cargo.toml
 ```
 
-Rust stable is required. The PDF reader uses **PDFium** through the Rust crate `pdfium-render`. No `pdfinfo`/`pdftoppm` command-line tools are required.\n\n### PDFium runtime\n\n`pdfium-render` is the Rust wrapper; the native PDFium library must be available at runtime. MiReDo tries, in this order:\n\n1. `MIREDO_PDFIUM_PATH` if it is defined (a full library path or a directory containing the platform library).\n2. The directory containing the MiReDo executable.\n3. A PDFium library provided by the operating system.\n\nFor a portable distribution, package the matching PDFium library next to the MiReDo executable: `libpdfium.so` on Linux, `pdfium.dll` on Windows, or `libpdfium.dylib` on macOS. Prebuilt binaries are available from [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases). Keep the native PDFium license notices with distributed binaries.
+Rust stable is required.
+
+### PDF engine decision
+
+The current codebase still uses `pdfium-render` for the working viewer, but the target architecture of MiReDo is a fully Rust PDF engine with no native system dependency.
+
+We evaluated the published pure-Rust candidates that are actually available from crates.io:
+
+- `hayro = "0.8.0"` — published crate, pure Rust PDF rasterizer, repository: https://github.com/LaurenzV/hayro
+- `pdfboss-render = "2.13.1"` — published crate, pure Rust PDF rendering pipeline, repository: https://github.com/4thel00z/pdfboss
+
+Both candidates comply with the architectural requirement of not depending on `PDFium`, `MuPDF`, `Poppler`, `pdftoppm`, `pdfinfo`, or other native libraries at runtime. The project should keep its abstraction layer independent from the renderer and migrate to one of these engines before shipping a production-ready, self-contained package.
+
+### Target architecture for the renderer
+
+MiReDo should expose a pure Rust renderer abstraction of the form:
+
+```rust
+trait PdfEngine {
+    fn open(&mut self, path: &std::path::Path) -> anyhow::Result<()>;
+    fn page_count(&self) -> anyhow::Result<usize>;
+    fn page_size(&self, page: usize) -> anyhow::Result<[u32; 2]>;
+    fn render_page(
+        &mut self,
+        page: usize,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<crate::pdf::RenderedPage>;
+    fn extract_text(&self, page: usize) -> anyhow::Result<String>;
+}
+```
+
+Then the egui layer should depend on the abstraction only, never directly on the implementation details of Hayro or pdfboss.
+
+### Recommended choice
+
+The preferred migration target is Hayro because it is a dedicated PDF rasterizer library with a stable published version and an explicit rendering API. pdfboss-render is the second candidate to benchmark on the real sample PDFs from `apps/miredo/data/`, because it is also pure Rust and may offer a different trade-off in text extraction and rendering features.
+
+The final engine choice must be validated on the real documents in this repository, not on advertisements alone.
+
+### PDFium compatibility note
+
+This note remains for the current transitional implementation only:
+
+1. `MIREDO_PDFIUM_PATH` if it is defined.
+2. The directory containing the MiReDo executable.
+3. Local bundle folders such as `pdfium/`, `lib/`, or `vendor/pdfium/` next to the executable.
+4. A PDFium library provided by the operating system.
+
+This is a temporary fallback while the project migrates to a pure Rust PDF engine.
 
 ## Local data and privacy
 

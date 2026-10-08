@@ -119,11 +119,26 @@ impl Translator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn palette_rejects_malformed_hex_values() {
         assert!(parse_color("#52786b").is_ok());
         assert!(parse_color("52786b").is_err());
         assert!(parse_color("#fff").is_err());
+    }
+
+    #[test]
+    fn every_locale_has_the_same_translation_keys() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("i18n.json");
+        let translator = Translator::load(&path).unwrap();
+        let french: HashSet<_> = translator.translations["fr"].keys().collect();
+
+        for locale in ["mg", "en"] {
+            let keys: HashSet<_> = translator.translations[locale].keys().collect();
+            assert_eq!(keys, french, "clés de traduction incohérentes pour {locale}");
+        }
     }
 }

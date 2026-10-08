@@ -155,4 +155,26 @@ mod tests {
         let by_lyrics = search_songs(&songs, "faneva", &filters, &favorites);
         assert_eq!(by_lyrics.len(), 2);
     }
+
+    #[test]
+    fn search_matches_authors_without_accents_and_combines_filters() {
+        let mut favorite_song = song("ff:001", "1", "Mitsangàna", "Ry mino");
+        favorite_song.authors = vec!["Rasoa Rakoto".into()];
+        favorite_song.pdf_path = Some(std::path::PathBuf::from("score.pdf"));
+        let mut other_song = song("ff:002", "2", "Fihavanana", "Mifankatia");
+        other_song.authors = vec!["Rasoa Rabe".into()];
+        let songs = vec![favorite_song, other_song];
+        let favorites = HashSet::from(["ff:001".to_owned()]);
+        let filters = SearchFilters {
+            collection: Some(Collection::Ffpm),
+            favorites_only: true,
+            pdf_only: true,
+            song_ids: None,
+        };
+
+        let results = search_songs(&songs, "  RASOA, RAKOTO! ", &filters, &favorites);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "ff:001");
+        assert!(search_songs(&songs, "rasoa", &filters, &HashSet::new()).is_empty());
+    }
 }

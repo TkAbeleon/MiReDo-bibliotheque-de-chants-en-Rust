@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -18,10 +18,16 @@ impl UserStorage {
         let project_dirs = ProjectDirs::from("org", "MiReDo", "MiReDo")
             .context("Impossible de déterminer le dossier utilisateur MiReDo")?;
         let data_dir = project_dirs.data_local_dir();
+        Self::open_at(&data_dir.join("miredo.sqlite3"))
+    }
+
+    fn open_at(db_path: &Path) -> Result<Self> {
+        let data_dir = db_path
+            .parent()
+            .context("Le chemin de la base SQLite ne contient pas de dossier")?;
         fs::create_dir_all(data_dir)
             .with_context(|| format!("Impossible de créer {}", data_dir.display()))?;
-        let db_path = data_dir.join("miredo.sqlite3");
-        let connection = Connection::open(&db_path)
+        let connection = Connection::open(db_path)
             .with_context(|| format!("Impossible d'ouvrir {}", db_path.display()))?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -225,28 +231,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn favorites_and_playlists_persist_in_sqlite() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys = ON;
-                 CREATE TABLE favorites(song_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
-                 CREATE TABLE playlists(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-                 CREATE TABLE playlist_songs(playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE, song_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(playlist_id, song_id));
-                 CREATE TABLE preferences(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 CREATE TABLE reading_positions(song_id TEXT NOT NULL, viewer TEXT NOT NULL, position REAL NOT NULL, PRIMARY KEY(song_id, viewer));",
-            )
-            .unwrap();
-        let storage = UserStorage { connection };
-        storage.toggle_favorite("ffpm:001").unwrap();
-        assert!(storage.favorite_ids().unwrap().contains("ffpm:001"));
-        let playlist_id = storage.create_playlist("Répétition").unwrap();
-        storage
-            .add_song_to_playlist(&playlist_id, "ffpm:001")
-            .unwrap();
-        assert_eq!(
-            storage.playlist_song_ids(&playlist_id).unwrap(),
-            vec!["ffpm:001"]
-        );
+    fn user_data_persists_after_closing_and_reopening_sqlite() {
+        let db_path = std::env::temp_dir().join(format!(
+            "miredo-storage-test-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&db_path);
+        let playlist_id;
+        {
+            let storage = UserStorage::open_at(&db_path).unwrap();
+            storage.toggle_favorite("ff:001").unwrap();
+            playlist_id = storage.create_playlist("Répétition").unwrap();
+            storage.add_song_to_playlist(&playlist_id, "ff:001").unwrap();
+            storage.set_preference("locale", "mg").unwrap();
+            storage
+                .save_reading_position("ff:001", "pdf", 3.0)
+                .unwrap();
+        }
+
+        let storage = UserStorage::open_at(&db_path).unwrap();
+        assert!(storage.favorite_ids().unwrap().contains("ff:001"));
+        assert_eq!(storage.playlist_song_ids(&playlist_id).unwrap(), vec!["ff:001"]);
+        assert_eq!(storage.preference("locale").unwrap().as_deref(), Some("mg"));
+        assert_eq!(storage.reading_position("ff:001", "pdf").unwrap(), Some(3.0));
+        drop(storage);
+        let _ = fs::remove_file(db_path);
     }
 }

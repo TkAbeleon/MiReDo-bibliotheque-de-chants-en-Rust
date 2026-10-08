@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -17,6 +17,15 @@ use crate::search::{self, SearchFilters};
 use crate::storage::UserStorage;
 
 const APP_DIR: &str = env!("CARGO_MANIFEST_DIR");
+const MAX_PDF_TEXTURES: usize = 6;
+const PDF_VIEWPORT_PADDING: f32 = 12.0;
+
+fn pdf_fit_scale(page_size: Vec2, available: Vec2) -> f32 {
+    let safe_available = (available - Vec2::splat(PDF_VIEWPORT_PADDING * 2.0)).max(Vec2::splat(1.0));
+    let width_ratio = safe_available.x / page_size.x.max(1.0);
+    let height_ratio = safe_available.y / page_size.y.max(1.0);
+    width_ratio.min(height_ratio).clamp(0.1, 6.0)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Page {
@@ -86,7 +95,6 @@ enum PdfLayout {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PdfFitMode {
-    FitScreen,
     FitWidth,
     FitHeight,
     Manual,
@@ -95,16 +103,14 @@ enum PdfFitMode {
 impl PdfFitMode {
     fn from_preference(value: Option<String>) -> Self {
         match value.as_deref() {
-            Some("width") => Self::FitWidth,
             Some("height") => Self::FitHeight,
             Some("manual") => Self::Manual,
-            _ => Self::FitScreen,
+            _ => Self::FitWidth,
         }
     }
 
     fn preference(self) -> &'static str {
         match self {
-            Self::FitScreen => "screen",
             Self::FitWidth => "width",
             Self::FitHeight => "height",
             Self::Manual => "manual",
@@ -117,6 +123,146 @@ enum PlaylistDialog {
     Create,
     Rename,
     Delete,
+}
+
+#[derive(Clone, Copy)]
+enum AppIcon {
+    Home,
+    Library,
+    Favorite,
+    Playlist,
+    Help,
+    About,
+    Settings,
+    Menu,
+    Search,
+    Previous,
+    Next,
+    Close,
+    ZoomIn,
+    ZoomOut,
+    Fullscreen,
+}
+
+fn paint_app_icon(painter: &egui::Painter, rect: egui::Rect, icon: AppIcon, color: egui::Color32) {
+    let center = rect.center();
+    let stroke = Stroke::new(1.6_f32, color);
+    let half = 7.0;
+    let point = |x: f32, y: f32| center + Vec2::new(x, y);
+    match icon {
+        AppIcon::Home => {
+            painter.line_segment([point(-8.0, -1.0), point(0.0, -8.0)], stroke);
+            painter.line_segment([point(0.0, -8.0), point(8.0, -1.0)], stroke);
+            painter.line_segment([point(-6.0, -2.0), point(-6.0, 7.0)], stroke);
+            painter.line_segment([point(6.0, -2.0), point(6.0, 7.0)], stroke);
+            painter.line_segment([point(-6.0, 7.0), point(6.0, 7.0)], stroke);
+            painter.line_segment([point(-1.5, 7.0), point(-1.5, 2.0)], stroke);
+            painter.line_segment([point(1.5, 7.0), point(1.5, 2.0)], stroke);
+        }
+        AppIcon::Library => {
+            for y in [-6.0, 0.0, 6.0] {
+                painter.line_segment([point(-7.0, y), point(7.0, y)], stroke);
+            }
+        }
+        AppIcon::Favorite => {
+            let points = (0..10)
+                .map(|index| {
+                    let angle = std::f32::consts::PI * index as f32 / 5.0
+                        - std::f32::consts::FRAC_PI_2;
+                    let radius = if index % 2 == 0 { half } else { half * 0.45 };
+                    point(angle.cos() * radius, angle.sin() * radius)
+                })
+                .collect();
+            painter.add(egui::Shape::closed_line(points, stroke));
+        }
+        AppIcon::Playlist => {
+            for y in [-6.0, 0.0, 6.0] {
+                painter.circle_filled(point(-6.0, y), 1.0, color);
+                painter.line_segment([point(-2.0, y), point(7.0, y)], stroke);
+            }
+        }
+        AppIcon::Help | AppIcon::About => {
+            painter.circle_stroke(center, 7.0, stroke);
+            let character = if matches!(icon, AppIcon::Help) { "?" } else { "i" };
+            painter.text(
+                center,
+                egui::Align2::CENTER_CENTER,
+                character,
+                egui::FontId::proportional(11.0),
+                color,
+            );
+        }
+        AppIcon::Settings => {
+            painter.circle_stroke(center, 6.0, stroke);
+            painter.circle_stroke(center, 2.0, stroke);
+            for index in 0..8 {
+                let angle = std::f32::consts::PI * index as f32 / 4.0;
+                let inner = point(angle.cos() * 7.0, angle.sin() * 7.0);
+                let outer = point(angle.cos() * 9.0, angle.sin() * 9.0);
+                painter.line_segment([inner, outer], stroke);
+            }
+        }
+        AppIcon::Menu => {
+            for y in [-6.0, 0.0, 6.0] {
+                painter.line_segment([point(-8.0, y), point(8.0, y)], stroke);
+            }
+        }
+        AppIcon::Search => {
+            painter.circle_stroke(point(-2.0, -2.0), 5.5, stroke);
+            painter.line_segment([point(2.0, 2.0), point(7.0, 7.0)], stroke);
+        }
+        AppIcon::Previous => {
+            painter.line_segment([point(6.0, -7.0), point(-1.0, 0.0)], stroke);
+            painter.line_segment([point(-1.0, 0.0), point(6.0, 7.0)], stroke);
+            painter.line_segment([point(-1.0, 0.0), point(8.0, 0.0)], stroke);
+        }
+        AppIcon::Next => {
+            painter.line_segment([point(-6.0, -7.0), point(1.0, 0.0)], stroke);
+            painter.line_segment([point(1.0, 0.0), point(-6.0, 7.0)], stroke);
+            painter.line_segment([point(-1.0, 0.0), point(8.0, 0.0)], stroke);
+        }
+        AppIcon::Close => {
+            painter.line_segment([point(-6.0, -6.0), point(6.0, 6.0)], stroke);
+            painter.line_segment([point(6.0, -6.0), point(-6.0, 6.0)], stroke);
+        }
+        AppIcon::ZoomIn | AppIcon::ZoomOut => {
+            painter.circle_stroke(point(-2.0, -2.0), 5.5, stroke);
+            painter.line_segment([point(2.0, 2.0), point(7.0, 7.0)], stroke);
+            painter.line_segment([point(-5.0, -2.0), point(1.0, -2.0)], stroke);
+            if matches!(icon, AppIcon::ZoomIn) {
+                painter.line_segment([point(-2.0, -5.0), point(-2.0, 1.0)], stroke);
+            }
+        }
+        AppIcon::Fullscreen => {
+            for (x, y, dx, dy) in [
+                (-7.0, -7.0, 1.0, 1.0),
+                (7.0, -7.0, -1.0, 1.0),
+                (-7.0, 7.0, 1.0, -1.0),
+                (7.0, 7.0, -1.0, -1.0),
+            ] {
+                painter.line_segment([point(x, y), point(x + dx * 5.0, y)], stroke);
+                painter.line_segment([point(x, y), point(x, y + dy * 5.0)], stroke);
+            }
+        }
+    }
+}
+
+fn icon_button(ui: &mut egui::Ui, icon: AppIcon, color: egui::Color32, tooltip: String) -> egui::Response {
+    icon_button_enabled(ui, icon, color, tooltip, true)
+}
+
+fn icon_button_enabled(
+    ui: &mut egui::Ui,
+    icon: AppIcon,
+    color: egui::Color32,
+    tooltip: String,
+    enabled: bool,
+) -> egui::Response {
+    let response = ui.add_enabled_ui(enabled, |ui| {
+        ui.add_sized(Vec2::splat(36.0), egui::Button::new(""))
+    }).inner;
+    paint_app_icon(ui.painter(), response.rect, icon, color);
+    response.on_hover_text(tooltip)
 }
 
 pub struct MiReDoApp {
@@ -150,11 +296,14 @@ pub struct MiReDoApp {
     dialog_error: Option<String>,
     status: Option<(String, Instant)>,
     fullscreen: bool,
+    nav_menu_open: bool,
     pdf_page: usize,
+    pdf_page_size: Option<Vec2>,
     pdf_renderer: PdfRenderer,
     pdf_response_sender: Sender<PdfRenderResponse>,
     pdf_receiver: Receiver<PdfRenderResponse>,
     pdf_textures: HashMap<String, TextureHandle>,
+    pdf_texture_order: VecDeque<String>,
     pdf_errors: HashMap<String, String>,
     pdf_pending: HashSet<String>,
     pdf_page_counts: HashMap<String, usize>,
@@ -230,11 +379,14 @@ impl MiReDoApp {
             dialog_error: None,
             status: None,
             fullscreen: false,
+            nav_menu_open: false,
             pdf_page: 1,
+            pdf_page_size: None,
             pdf_renderer,
             pdf_response_sender: pdf_receiver_sender,
             pdf_receiver,
             pdf_textures: HashMap::new(),
+            pdf_texture_order: VecDeque::new(),
             pdf_errors: HashMap::new(),
             pdf_pending: HashSet::new(),
             pdf_page_counts: HashMap::new(),
@@ -292,6 +444,20 @@ impl MiReDoApp {
     }
 
     fn handle_shortcuts(&mut self, context: &EguiContext) {
+        let escape = context.input(|input| input.key_pressed(egui::Key::Escape));
+        if escape && self.nav_menu_open {
+            self.nav_menu_open = false;
+        } else if escape && self.pdf_search_open {
+            self.pdf_search_open = false;
+        } else if escape && self.fullscreen {
+            self.fullscreen = false;
+            context.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+        }
+
+        if context.wants_keyboard_input() {
+            return;
+        }
+
         let command_k =
             context.input(|input| input.modifiers.command && input.key_pressed(egui::Key::K));
         if command_k {
@@ -306,18 +472,6 @@ impl MiReDoApp {
                     context.memory_mut(|memory| memory.request_focus(search_id));
                 }
             }
-        }
-
-        let escape = context.input(|input| input.key_pressed(egui::Key::Escape));
-        if escape && self.pdf_search_open {
-            self.pdf_search_open = false;
-        } else if escape && self.fullscreen {
-            self.fullscreen = false;
-            context.send_viewport_cmd(ViewportCommand::Fullscreen(false));
-        }
-
-        if context.wants_keyboard_input() {
-            return;
         }
 
         let next = context.input(|input| {
@@ -342,9 +496,8 @@ impl MiReDoApp {
         if previous {
             self.move_song(-1);
         }
-        if toggle_favorite {            if let Some(song_id) = self.selected_song_id.clone() {
-                self.toggle_favorite(&song_id);
-            }
+        if toggle_favorite && let Some(song_id) = self.selected_song_id.clone() {
+            self.toggle_favorite(&song_id);
         }
         if toggle_viewer {
             self.toggle_viewer();
@@ -370,6 +523,12 @@ impl MiReDoApp {
             }
             match response.result {
                 Ok(page) => {
+                    if self.pdf_page_size.is_none() {
+                        self.pdf_page_size = Some(Vec2::new(
+                            page.size[0] as f32,
+                            page.size[1] as f32,
+                        ));
+                    }
                     let color_image =
                         egui::ColorImage::from_rgba_unmultiplied(page.size, &page.rgba);
                     let texture = context.load_texture(
@@ -377,7 +536,14 @@ impl MiReDoApp {
                         color_image,
                         TextureOptions::LINEAR,
                     );
+                    self.pdf_texture_order.retain(|key| key != &response.key);
+                    self.pdf_texture_order.push_back(response.key.clone());
                     self.pdf_textures.insert(response.key.clone(), texture);
+                    while self.pdf_texture_order.len() > MAX_PDF_TEXTURES {
+                        if let Some(oldest_key) = self.pdf_texture_order.pop_front() {
+                            self.pdf_textures.remove(&oldest_key);
+                        }
+                    }
                     self.pdf_errors.remove(&response.key);
                 }
                 Err(error) => {
@@ -387,8 +553,8 @@ impl MiReDoApp {
         }
     }
 
-    fn request_pdf_page(&mut self, song: &Song, page: usize) {
-        let render_zoom = self.pdf_render_zoom();
+    fn request_pdf_page(&mut self, song: &Song, page: usize, available: Vec2) {
+        let render_zoom = self.pdf_fit_zoom(available);
         let key = pdf::page_key(&song.id, page, render_zoom);
         if self.pdf_textures.contains_key(&key) || !self.pdf_pending.insert(key.clone()) {
             return;
@@ -517,6 +683,7 @@ impl MiReDoApp {
             self.show_error(error);
         }
         self.pdf_textures.clear();
+        self.pdf_texture_order.clear();
         self.pdf_pending.clear();
         self.pdf_errors.clear();
     }
@@ -536,13 +703,14 @@ impl MiReDoApp {
             self.show_error(error);
         }
         self.pdf_textures.clear();
+        self.pdf_texture_order.clear();
         self.pdf_pending.clear();
         self.pdf_errors.clear();
     }
 
     fn set_pdf_layout(&mut self, layout: PdfLayout) {
         self.pdf_layout = layout;
-        if layout == PdfLayout::Double && self.pdf_page > 1 && self.pdf_page % 2 == 0 {
+        if layout == PdfLayout::Double && self.pdf_page > 1 && self.pdf_page.is_multiple_of(2) {
             self.pdf_page -= 1;
         }
         let value = if layout == PdfLayout::Double { "double" } else { "single" };
@@ -551,10 +719,13 @@ impl MiReDoApp {
         }
     }
 
-    fn pdf_render_zoom(&self) -> f32 {
+    fn pdf_fit_zoom(&self, available: Vec2) -> f32 {
+        let Some(page_size) = self.pdf_page_size else {
+            return self.zoom.max(0.5);
+        };
         match self.pdf_fit_mode {
             PdfFitMode::Manual => self.zoom.max(0.5),
-            PdfFitMode::FitScreen | PdfFitMode::FitWidth | PdfFitMode::FitHeight => 4.0,
+            PdfFitMode::FitWidth | PdfFitMode::FitHeight => pdf_fit_scale(page_size, available),
         }
     }
 
@@ -633,11 +804,9 @@ impl MiReDoApp {
     }
 
     fn draw_sidebar(&mut self, context: &EguiContext) {
-        let compact = context.screen_rect().width() < 980.0;
-        let width = if compact { 72.0 } else { 236.0 };
         egui::SidePanel::left("miredo-sidebar")
             .resizable(false)
-            .exact_width(width)
+            .exact_width(236.0)
             .frame(
                 egui::Frame::new()
                     .fill(self.palette().get("surface"))
@@ -645,33 +814,26 @@ impl MiReDoApp {
             )
             .show(context, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(if compact { "M" } else { "MiReDo" })
-                            .size(22.0)
-                            .strong()
-                            .color(self.palette().get("accent")),
-                    );
+                    ui.label(RichText::new("MiReDo").size(22.0).strong().color(self.palette().get("accent")));
                 });
-                if !compact {
-                    ui.label(
-                        RichText::new(self.tr("app.tagline"))
-                            .size(11.0)
-                            .color(self.palette().get("text_muted")),
-                    );
-                }
+                ui.label(
+                    RichText::new(self.tr("app.tagline"))
+                        .size(11.0)
+                        .color(self.palette().get("text_muted")),
+                );
                 ui.add_space(22.0);
 
-                self.nav_item(ui, Page::Home, "nav.home", "⌂", compact);
-                self.nav_item(ui, Page::Library, "nav.library", "≡", compact);
-                self.nav_item(ui, Page::Favorites, "nav.favorites", "☆", compact);
-                self.nav_item(ui, Page::Playlists, "nav.playlists", "▤", compact);
+                self.nav_item(ui, Page::Home, "nav.home", AppIcon::Home);
+                self.nav_item(ui, Page::Library, "nav.library", AppIcon::Library);
+                self.nav_item(ui, Page::Favorites, "nav.favorites", AppIcon::Favorite);
+                self.nav_item(ui, Page::Playlists, "nav.playlists", AppIcon::Playlist);
 
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
-                self.nav_item(ui, Page::Help, "nav.help", "?", compact);
-                self.nav_item(ui, Page::About, "nav.about", "i", compact);
-                self.nav_item(ui, Page::Settings, "nav.settings", "⚙", compact);
+                self.nav_item(ui, Page::Help, "nav.help", AppIcon::Help);
+                self.nav_item(ui, Page::About, "nav.about", AppIcon::About);
+                self.nav_item(ui, Page::Settings, "nav.settings", AppIcon::Settings);
 
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                     ui.add_space(8.0);
@@ -682,12 +844,9 @@ impl MiReDoApp {
                     };
                     let response = ui.add_sized(
                         [ui.available_width(), 34.0],
-                        egui::Button::new(                            RichText::new(if compact {
-                                language.to_owned()
-                            } else {
-                                format!("{}  {language}", self.tr("settings.language"))
-                            })
-                            .color(self.palette().get("text_secondary")),
+                        egui::Button::new(
+                            RichText::new(format!("{}  {language}", self.tr("settings.language")))
+                                .color(self.palette().get("text_secondary")),
                         )
                         .fill(self.palette().get("surface_hover"))
                         .stroke(Stroke::NONE),
@@ -699,37 +858,78 @@ impl MiReDoApp {
             });
     }
 
-    fn nav_item(&mut self, ui: &mut egui::Ui, page: Page, key: &str, glyph: &str, compact: bool) {
-        let label = if compact {
-            glyph.to_owned()
-        } else {
-            format!("{glyph}   {}", self.tr(key))
-        };
+    fn nav_item(&mut self, ui: &mut egui::Ui, page: Page, key: &str, icon: AppIcon) -> bool {
         let selected = self.page == page;
-        let button = egui::Button::new(RichText::new(label).color(if selected {
-            self.palette().get("accent")
-        } else {
-            self.palette().get("text_secondary")
-        }))
-        .fill(if selected {
-            self.palette().get("surface_selected")
-        } else {
-            self.palette().get("surface")
-        })
-        .stroke(Stroke::NONE)
-        .min_size(Vec2::new(ui.available_width(), 38.0));
-        let response = ui.add(button);
-        if compact {
-            response.clone().on_hover_text(self.tr(key));
-        }
+        let response = ui.add_sized(
+            [ui.available_width(), 38.0],
+            egui::Button::new("")
+                .fill(if selected { self.palette().get("surface_selected") } else { self.palette().get("surface") })
+                .stroke(Stroke::NONE),
+        );
+        let color = if selected { self.palette().get("accent") } else { self.palette().get("text_secondary") };
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(response.rect.left() + 20.0, response.rect.center().y),
+            Vec2::splat(22.0),
+        );
+        paint_app_icon(ui.painter(), icon_rect, icon, color);
+        ui.painter().text(
+            egui::pos2(response.rect.left() + 42.0, response.rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            self.tr(key),
+            egui::FontId::proportional(14.0),
+            color,
+        );
         if response.clicked() {
             self.page = page;
         }
+        response.clicked()
     }
 
-    fn draw_topbar(&mut self, ui: &mut egui::Ui) {
+    fn draw_nav_drawer(&mut self, context: &EguiContext) {
+        if !self.nav_menu_open {
+            return;
+        }
+        let mut selection_changed = false;
+        egui::Area::new(Id::new("miredo-nav-drawer"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(8.0, 48.0))
+            .show(context, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(236.0);
+                    ui.label(RichText::new("MiReDo").size(18.0).strong().color(self.palette().get("accent")));
+                    ui.add_space(8.0);
+                    for (page, key, icon) in [
+                        (Page::Home, "nav.home", AppIcon::Home),
+                        (Page::Library, "nav.library", AppIcon::Library),
+                        (Page::Favorites, "nav.favorites", AppIcon::Favorite),
+                        (Page::Playlists, "nav.playlists", AppIcon::Playlist),
+                        (Page::Help, "nav.help", AppIcon::Help),
+                        (Page::About, "nav.about", AppIcon::About),
+                        (Page::Settings, "nav.settings", AppIcon::Settings),
+                    ] {
+                        selection_changed |= self.nav_item(ui, page, key, icon);
+                    }
+                });
+            });
+        if selection_changed {
+            self.nav_menu_open = false;
+        }
+    }
+
+    fn draw_topbar(&mut self, context: &EguiContext, ui: &mut egui::Ui) {
         let search_placeholder = self.tr("search.placeholder");
         ui.horizontal(|ui| {
+            if context.screen_rect().width() < 760.0
+                && icon_button(
+                    ui,
+                    AppIcon::Menu,
+                    self.palette().get("text_primary"),
+                    self.tr("nav.library"),
+                )
+                .clicked()
+            {
+                self.nav_menu_open = !self.nav_menu_open;
+            }
             ui.label(
                 RichText::new(self.page_heading())
                     .size(22.0)
@@ -748,14 +948,14 @@ impl MiReDoApp {
                         self.status = None;
                     }
                 }
-                if self.page == Page::Reader && self.current_song().is_some() {
-                    if ui
+                if self.page == Page::Reader
+                    && self.current_song().is_some()
+                    && ui
                         .button(self.tr("common.close"))
                         .on_hover_text(self.tr("common.close"))
                         .clicked()
-                    {
-                        self.page = Page::Library;
-                    }
+                {
+                    self.page = Page::Library;
                 }
             });
         });
@@ -770,11 +970,8 @@ impl MiReDoApp {
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("⌕")
-                    .size(18.0)
-                    .color(self.palette().get("text_muted")),
-            );
+            let (search_rect, _) = ui.allocate_exact_size(Vec2::splat(24.0), egui::Sense::hover());
+            paint_app_icon(ui.painter(), search_rect, AppIcon::Search, self.palette().get("text_muted"));
             let available = ui.available_width().min(660.0);
             let response = ui.add_sized(
                 [available, 36.0],
@@ -786,7 +983,7 @@ impl MiReDoApp {
             if response.changed() && self.page != Page::Library {
                 self.page = Page::Library;
             }
-            if !self.query.is_empty() && ui.button("×").clicked() {
+            if !self.query.is_empty() && ui.button("x").clicked() {
                 self.query.clear();
             }
             if self.page == Page::Reader {
@@ -838,7 +1035,7 @@ impl MiReDoApp {
         if ui
             .add(
                 egui::Button::new(
-                    RichText::new(format!("{}   →", action_label))
+                    RichText::new(format!("{}   >", action_label))
                         .strong()
                         .color(self.palette().get("accent_text")),
                 )
@@ -1108,7 +1305,7 @@ impl MiReDoApp {
                             }
                             if remove_from_playlist.is_some() {
                                 let remove = ui
-                                    .button("×")
+                                    .button("x")
                                     .on_hover_text(self.tr("playlists.remove_song"));
                                 if remove.clicked() {
                                     remove_id = Some(song_id.clone());
@@ -1123,18 +1320,18 @@ impl MiReDoApp {
         if let Some(song_id) = favorite_id {
             self.toggle_favorite(&song_id);
         }
-        if let Some(song_id) = remove_id {
-            if let Some(playlist_id) = remove_from_playlist {
-                match self
-                    .storage
-                    .remove_song_from_playlist(&playlist_id, &song_id)
-                {
-                    Ok(()) => {
-                        self.refresh_user_data();
-                        self.set_status(self.tr("status.song_removed"));
-                    }
-                    Err(error) => self.show_error(error),
+        if let Some(song_id) = remove_id
+            && let Some(playlist_id) = remove_from_playlist
+        {
+            match self
+                .storage
+                .remove_song_from_playlist(&playlist_id, &song_id)
+            {
+                Ok(()) => {
+                    self.refresh_user_data();
+                    self.set_status(self.tr("status.song_removed"));
                 }
+                Err(error) => self.show_error(error),
             }
         }
         if let Some(song_id) = open_id {
@@ -1249,23 +1446,33 @@ impl MiReDoApp {
         let next_enabled = navigation_position
             .is_some_and(|index| index + 1 < self.navigation_song_ids.len());
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.set_min_height(34.0);
 
-            if ui
-                .button("‹")
-                .on_hover_text(self.tr("common.close"))
+            if icon_button(
+                ui,
+                AppIcon::Menu,
+                self.palette().get("text_primary"),
+                self.tr("nav.library"),
+            )
+            .clicked()
+            {
+                self.nav_menu_open = !self.nav_menu_open;
+            }
+
+            if icon_button(ui, AppIcon::Close, self.palette().get("text_primary"), self.tr("common.close"))
                 .clicked()
             {
                 self.page = Page::Library;
             }
 
-            if ui
-                .add_enabled(
-                    previous_enabled,
-                    egui::Button::new("←"),
-                )
-                .on_hover_text(self.tr("common.previous"))
+            if icon_button_enabled(
+                ui,
+                AppIcon::Previous,
+                self.palette().get("text_primary"),
+                self.tr("common.previous"),
+                previous_enabled,
+            )
                 .clicked()
             {
                 self.move_song(-1);
@@ -1282,9 +1489,13 @@ impl MiReDoApp {
                 .truncate(),
             );
 
-            if ui
-                .add_enabled(next_enabled, egui::Button::new("→"))
-                .on_hover_text(self.tr("common.next"))
+            if icon_button_enabled(
+                ui,
+                AppIcon::Next,
+                self.palette().get("text_primary"),
+                self.tr("common.next"),
+                next_enabled,
+            )
                 .clicked()
             {
                 self.move_song(1);
@@ -1313,9 +1524,12 @@ impl MiReDoApp {
                 self.set_viewer_mode(ViewerMode::Text);
             }
 
-            if ui
-                .button("⌕")
-                .on_hover_text(self.tr("search.placeholder"))
+            if icon_button(
+                ui,
+                AppIcon::Search,
+                self.palette().get("text_primary"),
+                self.tr("search.placeholder"),
+            )
                 .clicked()
             {
                 self.pdf_search_open = true;
@@ -1324,17 +1538,13 @@ impl MiReDoApp {
 
             ui.separator();
 
-            if ui
-                .button("−")
-                .on_hover_text(self.tr("reader.zoom_out"))
+            if icon_button(ui, AppIcon::ZoomOut, self.palette().get("text_primary"), self.tr("reader.zoom_out"))
                 .clicked()
             {
                 self.change_zoom(-0.1);
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
-            if ui
-                .button("+")
-                .on_hover_text(self.tr("reader.zoom_in"))
+            if icon_button(ui, AppIcon::ZoomIn, self.palette().get("text_primary"), self.tr("reader.zoom_in"))
                 .clicked()
             {
                 self.change_zoom(0.1);
@@ -1345,16 +1555,20 @@ impl MiReDoApp {
             let total_pages = self.pdf_page_counts.get(&song.id).copied();
             let is_book = self.pdf_layout == PdfLayout::Double;
             let step = if is_book { 2 } else { 1 };
-            let current_start = if is_book && self.pdf_page > 1 && self.pdf_page % 2 == 0 {
+            let current_start = if is_book && self.pdf_page > 1 && self.pdf_page.is_multiple_of(2) {
                 self.pdf_page - 1
             } else {
                 self.pdf_page
             };
             let next_start = current_start.saturating_add(step);
 
-            if ui
-                .add_enabled(current_start > 1, egui::Button::new("‹"))
-                .on_hover_text(self.tr("common.previous"))
+            if icon_button_enabled(
+                ui,
+                AppIcon::Previous,
+                self.palette().get("text_primary"),
+                self.tr("common.previous"),
+                current_start > 1,
+            )
                 .clicked()
             {
                 self.set_pdf_page(&song.id, current_start.saturating_sub(step).max(1));
@@ -1372,12 +1586,13 @@ impl MiReDoApp {
                     .unwrap_or_else(|| format!("{} {}", self.tr("reader.page"), current_start)),
             );
 
-            if ui
-                .add_enabled(
-                    total_pages.is_none_or(|total| next_start <= total),
-                    egui::Button::new("›"),
-                )
-                .on_hover_text(self.tr("common.next"))
+            if icon_button_enabled(
+                ui,
+                AppIcon::Next,
+                self.palette().get("text_primary"),
+                self.tr("common.next"),
+                total_pages.is_none_or(|total| next_start <= total),
+            )
                 .clicked()
             {
                 self.set_pdf_page(&song.id, next_start);
@@ -1386,7 +1601,6 @@ impl MiReDoApp {
             ui.separator();
 
             let fit_label = match self.pdf_fit_mode {
-                PdfFitMode::FitScreen => self.tr("reader.fit_screen"),
                 PdfFitMode::FitWidth => self.tr("reader.fit_width"),
                 PdfFitMode::FitHeight => self.tr("reader.fit_height"),
                 PdfFitMode::Manual => self.tr("reader.manual_zoom"),
@@ -1395,16 +1609,6 @@ impl MiReDoApp {
                 .selected_text(fit_label)
                 .width(150.0)
                 .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(
-                            self.pdf_fit_mode == PdfFitMode::FitScreen,
-                            self.tr("reader.fit_screen"),
-                        )
-                        .clicked()
-                    {
-                        self.set_pdf_fit_mode(PdfFitMode::FitScreen);
-                        ui.close();
-                    }
                     if ui
                         .selectable_label(
                             self.pdf_fit_mode == PdfFitMode::FitWidth,
@@ -1437,16 +1641,12 @@ impl MiReDoApp {
                     }
                 });
 
-            if ui
-                .button("−")
-                .on_hover_text(self.tr("reader.zoom_out"))
+            if icon_button(ui, AppIcon::ZoomOut, self.palette().get("text_primary"), self.tr("reader.zoom_out"))
                 .clicked()
             {
                 self.change_zoom(-0.1);
             }
-            if ui
-                .button("+")
-                .on_hover_text(self.tr("reader.zoom_in"))
+            if icon_button(ui, AppIcon::ZoomIn, self.palette().get("text_primary"), self.tr("reader.zoom_in"))
                 .clicked()
             {
                 self.change_zoom(0.1);
@@ -1520,9 +1720,12 @@ impl MiReDoApp {
                 }
             }
 
-            if ui
-                .button("⛶")
-                .on_hover_text(self.tr("reader.fullscreen"))
+            if icon_button(
+                ui,
+                AppIcon::Fullscreen,
+                self.palette().get("text_primary"),
+                self.tr("reader.fullscreen"),
+            )
                 .clicked()
             {
                 self.fullscreen = !self.fullscreen;
@@ -1540,10 +1743,8 @@ impl MiReDoApp {
             let result_count = self.visible_ids(false, None).len();
 
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("⌕")
-                        .color(self.palette().get("text_muted")),
-                );
+                let (search_rect, _) = ui.allocate_exact_size(Vec2::splat(24.0), egui::Sense::hover());
+                paint_app_icon(ui.painter(), search_rect, AppIcon::Search, self.palette().get("text_muted"));
                 let response = ui.add_sized(
                     [320.0, 30.0],
                     egui::TextEdit::singleline(&mut self.query)
@@ -1551,7 +1752,7 @@ impl MiReDoApp {
                         .hint_text(search_placeholder),
                 );
                 self.search_id = Some(response.id);
-                if ui.button("×").clicked() {
+                if ui.button("x").clicked() {
                     self.query.clear();
                     self.pdf_search_open = false;
                 }
@@ -1608,7 +1809,7 @@ impl MiReDoApp {
         let total_pages = self.pdf_page_counts.get(&song.id).copied();
         let first_page = if self.pdf_layout == PdfLayout::Double
             && self.pdf_page > 1
-            && self.pdf_page % 2 == 0
+            && self.pdf_page.is_multiple_of(2)
         {
             self.pdf_page - 1
         } else {
@@ -1621,9 +1822,11 @@ impl MiReDoApp {
             vec![first_page]
         };
 
+        let available = ui.available_size().max(Vec2::splat(1.0));
+
         for page in &pages {
             if total_pages.is_none_or(|total| *page <= total) {
-                self.request_pdf_page(song, *page);
+                self.request_pdf_page(song, *page, available);
             }
         }
 
@@ -1634,17 +1837,8 @@ impl MiReDoApp {
             first_page + 2,
         ] {
             if adjacent >= 1 && total_pages.is_none_or(|total| adjacent <= total) {
-                self.request_pdf_page(song, adjacent);
+                self.request_pdf_page(song, adjacent, available);
             }
-        }
-
-        let available = ui.available_size().max(Vec2::splat(1.0));
-
-        // Le mode par défaut est réellement "page entière" :
-        // aucun ScrollArea n'est créé, donc aucune barre de défilement n'apparaît.
-        if self.pdf_fit_mode == PdfFitMode::FitScreen {
-            self.draw_pdf_fit_screen(ui, &song.id, &pages, available);
-            return;
         }
 
         ScrollArea::both()
@@ -1664,98 +1858,6 @@ impl MiReDoApp {
                     self.draw_pdf_page(ui, &song.id, pages[0], available);
                 }
             });
-    }
-
-    fn draw_pdf_fit_screen(
-        &self,
-        ui: &mut egui::Ui,
-        song_id: &str,
-        pages: &[usize],
-        available: Vec2,
-    ) {
-        const GAP: f32 = 6.0;
-        const SAFE_INSET: f32 = 3.0;
-
-        let viewport = (available - Vec2::splat(SAFE_INSET * 2.0)).max(Vec2::splat(1.0));
-        let render_zoom = self.pdf_render_zoom();
-
-        let textures = pages
-            .iter()
-            .map(|page| {
-                let key = pdf::page_key(song_id, *page, render_zoom);
-                self.pdf_textures
-                    .get(&key)
-                    .map(|texture| (texture, texture.size_vec2() / render_zoom.max(0.01)))
-            })
-            .collect::<Vec<_>>();
-
-        if textures.iter().any(|item| item.is_none()) {
-            ui.centered_and_justified(|ui| {
-                if self.pdf_errors.values().next().is_some() {
-                    ui.label(self.tr("reader.pdf_error"));
-                } else {
-                    ui.label(self.tr("common.loading"));
-                }
-            });
-            return;
-        }
-
-        let textures = textures
-            .into_iter()
-            .map(Option::unwrap)
-            .collect::<Vec<_>>();
-
-        let scale = if pages.len() == 1 {
-            let logical = textures[0].1;
-            let sx = viewport.x / logical.x.max(1.0);
-            let sy = viewport.y / logical.y.max(1.0);
-            sx.min(sy)
-        } else {
-            let total_width = textures.iter().map(|(_, size)| size.x).sum::<f32>() + GAP;
-            let max_height = textures
-                .iter()
-                .map(|(_, size)| size.y)
-                .fold(0.0_f32, f32::max);
-
-            let sx = viewport.x / total_width.max(1.0);
-            let sy = viewport.y / max_height.max(1.0);
-            sx.min(sy)
-        }
-        .clamp(0.01, 6.0);
-
-        if pages.len() == 1 {
-            let (texture, logical_size) = textures[0];
-            let display_size = logical_size * scale;
-            let rect = ui.available_rect_before_wrap();
-            let left = rect.center().x - display_size.x / 2.0;
-            let top = rect.center().y - display_size.y / 2.0;
-            let draw_rect = egui::Rect::from_min_size(
-                egui::pos2(left, top),
-                display_size,
-            );
-
-            ui.put(draw_rect, egui::Image::new((texture.id(), display_size)));
-        } else {
-            let total_display_width = textures
-                .iter()
-                .map(|(_, size)| size.x * scale)
-                .sum::<f32>()
-                + GAP;
-            let start_x = ui.available_rect_before_wrap().center().x - total_display_width / 2.0;
-
-            let mut x = start_x;
-            let center_y = ui.available_rect_before_wrap().center().y;
-            for (index, (texture, logical_size)) in textures.iter().enumerate() {
-                let display_size = *logical_size * scale;
-                let y = center_y - display_size.y / 2.0;
-                let rect = egui::Rect::from_min_size(egui::pos2(x, y), display_size);
-                ui.put(rect, egui::Image::new((texture.id(), display_size)));
-                x += display_size.x;
-                if index + 1 < textures.len() {
-                    x += GAP;
-                }
-            }
-        }
     }
 
     fn draw_reader(&mut self, context: &EguiContext, ui: &mut egui::Ui) {
@@ -1962,9 +2064,13 @@ impl MiReDoApp {
         ui.horizontal(|ui| {
             let previous_enabled = self.pdf_page > 1;
             let next_enabled = total_pages.is_none_or(|total| self.pdf_page < total);
-            if ui
-                .add_enabled(previous_enabled, egui::Button::new("‹"))
-                .on_hover_text(self.tr("common.previous"))
+            if icon_button_enabled(
+                ui,
+                AppIcon::Previous,
+                self.palette().get("text_primary"),
+                self.tr("common.previous"),
+                previous_enabled,
+            )
                 .clicked()
             {
                 self.set_pdf_page(&song.id, self.pdf_page.saturating_sub(1));
@@ -1980,25 +2086,25 @@ impl MiReDoApp {
                 })
                 .unwrap_or_else(|| format!("{} {}", self.tr("reader.page"), self.pdf_page));
             ui.label(count);
-            if ui
-                .add_enabled(next_enabled, egui::Button::new("›"))
-                .on_hover_text(self.tr("common.next"))
+            if icon_button_enabled(
+                ui,
+                AppIcon::Next,
+                self.palette().get("text_primary"),
+                self.tr("common.next"),
+                next_enabled,
+            )
                 .clicked()
             {
                 self.set_pdf_page(&song.id, self.pdf_page + 1);
             }
             ui.separator();
-            if ui
-                .button("−")
-                .on_hover_text(self.tr("reader.zoom_out"))
+            if icon_button(ui, AppIcon::ZoomOut, self.palette().get("text_primary"), self.tr("reader.zoom_out"))
                 .clicked()
             {
                 self.change_zoom(-0.1);
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
-            if ui
-                .button("+")
-                .on_hover_text(self.tr("reader.zoom_in"))
+            if icon_button(ui, AppIcon::ZoomIn, self.palette().get("text_primary"), self.tr("reader.zoom_in"))
                 .clicked()
             {
                 self.change_zoom(0.1);
@@ -2022,9 +2128,12 @@ impl MiReDoApp {
             {
                 self.set_pdf_layout(PdfLayout::Double);
             }
-            if ui
-                .button("⛶")
-                .on_hover_text(self.tr("reader.fullscreen"))
+            if icon_button(
+                ui,
+                AppIcon::Fullscreen,
+                self.palette().get("text_primary"),
+                self.tr("reader.fullscreen"),
+            )
                 .clicked()
             {
                 self.fullscreen = !self.fullscreen;
@@ -2037,13 +2146,12 @@ impl MiReDoApp {
         } else {
             vec![self.pdf_page]
         };
+        let available = ui.available_size();
         for page in &pages {
             if total_pages.is_none_or(|total| *page <= total) {
-                self.request_pdf_page(song, *page);
+                self.request_pdf_page(song, *page, available);
             }
         }
-
-        let available = ui.available_size();
         egui::Frame::new()
             .fill(self.palette().get("viewer_background"))
             .inner_margin(egui::Margin::same(10))
@@ -2083,24 +2191,24 @@ impl MiReDoApp {
         page: usize,
         available: Vec2,
     ) {
-        let render_zoom = self.pdf_render_zoom();
+        let render_zoom = self.pdf_fit_zoom(available);
         let key = pdf::page_key(song_id, page, render_zoom);
         if let Some(texture) = self.pdf_textures.get(&key) {
             let size = texture.size_vec2();
             let logical_size = size / render_zoom.max(0.01);
+            let safe_available = (available - Vec2::splat(PDF_VIEWPORT_PADDING * 2.0))
+                .max(Vec2::splat(1.0));
 
             let scale = match self.pdf_fit_mode {
-                PdfFitMode::FitScreen => {
-                    (available.x / logical_size.x)
-                        .min(available.y / logical_size.y)
-                        .clamp(0.1, 6.0)
+                PdfFitMode::FitWidth | PdfFitMode::FitHeight => {
+                    let width_scale = (safe_available.x / logical_size.x.max(1.0)).clamp(0.1, 6.0);
+                    let height_scale = (safe_available.y / logical_size.y.max(1.0)).clamp(0.1, 6.0);
+                    width_scale.min(height_scale)
                 }
-                PdfFitMode::FitWidth => (available.x / logical_size.x).clamp(0.1, 6.0),
-                PdfFitMode::FitHeight => (available.y / logical_size.y).clamp(0.1, 6.0),
                 PdfFitMode::Manual => self.zoom.clamp(0.1, 6.0),
             };
 
-            let display_size = logical_size * scale;
+            let display_size = (logical_size * scale).min(safe_available);
             ui.vertical(|ui| {
                 ui.set_min_width(display_size.x);
                 ui.image((texture.id(), display_size));
@@ -2178,11 +2286,11 @@ impl MiReDoApp {
             });
             ui.horizontal(|ui| {
                 ui.label(self.tr("settings.initial_zoom"));
-                if ui.button("−").clicked() {
+                if icon_button(ui, AppIcon::ZoomOut, self.palette().get("text_primary"), self.tr("reader.zoom_out")).clicked() {
                     self.change_zoom(-0.1);
                 }
                 ui.label(format!("{:.0}%", self.zoom * 100.0));
-                if ui.button("+").clicked() {
+                if icon_button(ui, AppIcon::ZoomIn, self.palette().get("text_primary"), self.tr("reader.zoom_in")).clicked() {
                     self.change_zoom(0.1);
                 }
             });
@@ -2190,12 +2298,6 @@ impl MiReDoApp {
             ui.add_space(18.0);
             self.settings_section(ui, "settings.pdf_fit");
             ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(self.pdf_fit_mode == PdfFitMode::FitScreen, self.tr("reader.fit_screen"))
-                    .clicked()
-                {
-                    self.set_pdf_fit_mode(PdfFitMode::FitScreen);
-                }
                 if ui
                     .selectable_label(self.pdf_fit_mode == PdfFitMode::FitWidth, self.tr("reader.fit_width"))
                     .clicked()
@@ -2248,6 +2350,7 @@ impl MiReDoApp {
                         self.songs = songs;
                         self.report = report;
                         self.pdf_textures.clear();
+                        self.pdf_texture_order.clear();
                         self.pdf_page_counts.clear();
                         self.set_status(self.tr("settings.reloaded"));
                     }
@@ -2459,7 +2562,8 @@ impl eframe::App for MiReDoApp {
         self.apply_theme(context);
 
         let immersive_pdf = self.page == Page::Reader && self.viewer_mode == ViewerMode::Pdf;
-        if !immersive_pdf {
+        let narrow_window = context.screen_rect().width() < 760.0;
+        if !immersive_pdf && !narrow_window {
             self.draw_sidebar(context);
         }
 
@@ -2479,14 +2583,43 @@ impl eframe::App for MiReDoApp {
                 if immersive_pdf {
                     self.draw_pdf_reader_immersive(context, ui);
                 } else {
-                    self.draw_topbar(ui);
+                    self.draw_topbar(context, ui);
                     self.draw_page(context, ui);
                 }
             });
 
+        self.draw_nav_drawer(context);
         self.draw_playlist_dialog(context);
         if !self.pdf_pending.is_empty() {
             context.request_repaint_after(Duration::from_millis(80));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_page_scale_keeps_page_inside_safe_area() {
+        let page_size = Vec2::new(1000.0, 1500.0);
+        let available = Vec2::new(900.0, 700.0);
+
+        let scale = pdf_fit_scale(page_size, available);
+
+        assert!(page_size.x * scale <= available.x - PDF_VIEWPORT_PADDING * 2.0 + 0.0001);
+        assert!(page_size.y * scale <= available.y - PDF_VIEWPORT_PADDING * 2.0 + 0.0001);
+    }
+
+    #[test]
+    fn fit_page_scale_uses_smallest_ratio() {
+        let page_size = Vec2::new(2100.0, 2970.0);
+        let available = Vec2::new(1200.0, 900.0);
+
+        let scale = pdf_fit_scale(page_size, available);
+
+        assert!(scale < 1.0);
+        assert!(page_size.x * scale <= available.x - PDF_VIEWPORT_PADDING * 2.0 + 0.0001);
+        assert!(page_size.y * scale <= available.y - PDF_VIEWPORT_PADDING * 2.0 + 0.0001);
     }
 }

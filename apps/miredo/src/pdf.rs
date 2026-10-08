@@ -1,14 +1,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc::{Receiver, Sender, channel}, Arc, OnceLock};
+use std::sync::{mpsc::{Receiver, Sender, SyncSender, channel, sync_channel}, atomic::{AtomicU64, Ordering}};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use std::thread;
 
-use anyhow::{anyhow, bail, Context, Result};
-use pdfium_render::prelude::*;
+use anyhow::{bail, Context, Result};
+use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_syntax::Pdf;
+use hayro::vello_cpu::color::palette::css::WHITE;
+use hayro::{render, PixmapSettings, RenderCache, RenderSettings};
 
-const CACHE_VERSION: &str = "pdfium-v2";
+const CACHE_VERSION: &str = "hayro-v1";
 const DEFAULT_RENDER_DPI: f32 = 96.0;
 const MAX_RENDER_PIXELS: i32 = 4096;
+const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const CACHE_WRITE_QUEUE: usize = 2;
+
+static CACHE_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub struct RenderedPage {
@@ -34,6 +43,12 @@ struct PdfRenderRequest {
     key: String,
 }
 
+struct CacheWriteRequest {
+    path: PathBuf,
+    size: [usize; 2],
+    rgba: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct PdfRenderer {
     sender: Sender<PdfRenderRequest>,
@@ -42,7 +57,9 @@ pub struct PdfRenderer {
 impl PdfRenderer {
     pub fn new() -> Self {
         let (sender, receiver) = channel();
-        thread::spawn(move || worker_loop(receiver));
+        let (cache_sender, cache_receiver) = sync_channel(CACHE_WRITE_QUEUE);
+        thread::spawn(move || cache_writer_loop(cache_receiver));
+        thread::spawn(move || worker_loop(receiver, cache_sender));
         Self { sender }
     }
 
@@ -75,71 +92,18 @@ impl Default for PdfRenderer {
     }
 }
 
-/// PDFium is loaded once. The worker keeps the currently opened document alive
-/// so navigating between pages does not reopen and parse the PDF every time.
-static PDFIUM: OnceLock<Result<Arc<Pdfium>, String>> = OnceLock::new();
-
-fn pdfium_instance() -> Result<Arc<Pdfium>> {
-    PDFIUM
-        .get_or_init(|| {
-            let mut errors = Vec::new();
-
-            if let Some(path) = std::env::var_os("MIREDO_PDFIUM_PATH") {
-                let configured = PathBuf::from(path);
-                let library_path = if configured.is_dir() {
-                    Pdfium::pdfium_platform_library_name_at_path(&configured)
-                } else {
-                    configured
-                };
-
-                match Pdfium::bind_to_library(&library_path) {
-                    Ok(bindings) => return Ok(Arc::new(Pdfium::new(bindings))),
-                    Err(error) => errors.push(format!(
-                        "MIREDO_PDFIUM_PATH ({}): {error}",
-                        library_path.display()
-                    )),
-                }
-            }
-
-            if let Ok(executable) = std::env::current_exe() {
-                if let Some(parent) = executable.parent() {
-                    let library_path = Pdfium::pdfium_platform_library_name_at_path(parent);
-                    match Pdfium::bind_to_library(&library_path) {
-                        Ok(bindings) => return Ok(Arc::new(Pdfium::new(bindings))),
-                        Err(error) => errors.push(format!(
-                            "répertoire de l’exécutable ({}): {error}",
-                            library_path.display()
-                        )),
-                    }
-                }
-            }
-
-            match Pdfium::bind_to_system_library() {
-                Ok(bindings) => Ok(Arc::new(Pdfium::new(bindings))),
-                Err(error) => {
-                    errors.push(format!("bibliothèque système: {error}"));
-                    Err(errors.join("\n"))
-                }
-            }
-        })
-        .clone()
-        .map_err(|error| anyhow!("Impossible de charger PDFium : {error}"))
-}
-
-struct PdfWorker<'a> {
-    pdfium: &'a Pdfium,
+struct PdfWorker {
     document_path: Option<PathBuf>,
-    document: Option<PdfDocument<'a>>,
-    bitmap: Option<PdfBitmap<'a>>,
+    document: Option<Pdf>,
+    cache_sender: SyncSender<CacheWriteRequest>,
 }
 
-impl<'a> PdfWorker<'a> {
-    fn new(pdfium: &'a Pdfium) -> Self {
+impl PdfWorker {
+    fn new(cache_sender: SyncSender<CacheWriteRequest>) -> Self {
         Self {
-            pdfium,
             document_path: None,
             document: None,
-            bitmap: None,
+            cache_sender,
         }
     }
 
@@ -148,13 +112,11 @@ impl<'a> PdfWorker<'a> {
             return Ok(());
         }
 
-        // Release the old page handles and bitmap before switching documents.
-        self.document = None;
-        self.bitmap = None;
+        let bytes = fs::read(path)
+            .with_context(|| format!("Impossible de lire le PDF {}", path.display()))?;
         self.document = Some(
-            self.pdfium
-                .load_pdf_from_file(path, None)
-                .with_context(|| format!("Impossible d’ouvrir le PDF {}", path.display()))?,
+            Pdf::new(bytes)
+                .map_err(|error| anyhow::anyhow!("Impossible d’ouvrir le PDF {}: {error:?}", path.display()))?,
         );
         self.document_path = Some(path.to_path_buf());
         Ok(())
@@ -174,12 +136,8 @@ impl<'a> PdfWorker<'a> {
             .document_path
             .as_deref()
             .context("Aucun document PDF n’est chargé")?;
-        let page_count = self
-            .document
-            .as_ref()
-            .context("Aucun document PDF n’est chargé")?
-            .pages()
-            .len() as usize;
+        let document = self.document.as_ref().context("Aucun document PDF n’est chargé")?;
+        let page_count = document.pages().len();
 
         if page_number > page_count {
             bail!(
@@ -198,18 +156,13 @@ impl<'a> PdfWorker<'a> {
             let _ = fs::remove_file(&cache_path);
         }
 
-        let page_width;
-        let page_height;
-        {
-            let document = self.document.as_ref().expect("document checked above");
-            let page_index = (page_number - 1) as PdfPageIndex;
-            let page = document
-                .pages()
-                .get(page_index)
-                .with_context(|| format!("Impossible de charger la page {page_number}"))?;
-            page_width = page.width().value.max(1.0);
-            page_height = page.height().value.max(1.0);
-        }
+        let page = document
+            .pages()
+            .get(page_number - 1)
+            .with_context(|| format!("Impossible de charger la page {page_number}"))?;
+        let (page_width, page_height) = page.render_dimensions();
+        let page_width = page_width.max(1.0);
+        let page_height = page_height.max(1.0);
 
         let requested_scale = (DEFAULT_RENDER_DPI / 72.0) * zoom.max(0.1);
         let pixel_limit = MAX_RENDER_PIXELS as f32;
@@ -217,76 +170,51 @@ impl<'a> PdfWorker<'a> {
             .min(pixel_limit / (page_height * requested_scale))
             .min(1.0);
         let effective_scale = requested_scale * cap;
-        let target_width = (page_width * effective_scale).round().max(1.0) as Pixels;
-        let target_height = (page_height * effective_scale).round().max(1.0) as Pixels;
+        let target_width = (page_width * effective_scale).round().max(1.0) as u32;
+        let target_height = (page_height * effective_scale).round().max(1.0) as u32;
 
-        let mut bitmap = self.bitmap.take();
-        let bitmap_matches = bitmap
-            .as_ref()
-            .is_some_and(|value| value.width() == target_width && value.height() == target_height);
-        if !bitmap_matches {
-            bitmap = Some(PdfBitmap::empty(
-                target_width,
-                target_height,
-                PdfBitmapFormat::BGRA,
-            )?);
-        }
-        let mut bitmap = bitmap.expect("bitmap must exist after allocation");
+        let x_scale = target_width as f32 / page_width.max(1.0);
+        let y_scale = target_height as f32 / page_height.max(1.0);
+        let cache = RenderCache::new();
+        let pixmap = render(
+            page,
+            &cache,
+            &InterpreterSettings::default(),
+            &RenderSettings::default(),
+            &PixmapSettings {
+                x_scale,
+                y_scale,
+                bg_color: WHITE,
+            },
+        );
 
-        let render_config = PdfRenderConfig::new()
-            .set_target_width(target_width)
-            .set_maximum_height(target_height)
-            .set_reverse_byte_order(true);
-
-        {
-            let document = self.document.as_ref().expect("document checked above");
-            let page_index = (page_number - 1) as PdfPageIndex;
-            let page = document
-                .pages()
-                .get(page_index)
-                .with_context(|| format!("Impossible de charger la page {page_number}"))?;
-            page.render_into_bitmap_with_config(&mut bitmap, &render_config)
-                .context("Le rendu PDFium a échoué")?;
-        }
-
-        let rgba = bitmap.as_rgba_bytes();
         let rendered = RenderedPage {
-            size: [target_width as usize, target_height as usize],
-            rgba,
+            size: [pixmap.width() as usize, pixmap.height() as usize],
+            rgba: pixmap.data_as_u8_slice().to_vec(),
         };
-        self.bitmap = Some(bitmap);
 
-        // The first frame must not wait for PNG compression / disk I/O.
-        // The small copy is deliberate: it lets the UI receive the rendered page immediately.
-        let cache_path_for_write = cache_path.clone();
-        let cache_page = rendered.rgba.clone();
-        let cache_size = rendered.size;
-        thread::spawn(move || {
-            let _ = save_cached_page(&cache_path_for_write, cache_size, &cache_page);
+        let _ = self.cache_sender.try_send(CacheWriteRequest {
+            path: cache_path,
+            size: rendered.size,
+            rgba: rendered.rgba.clone(),
         });
 
         Ok((page_count, rendered))
     }
 }
 
-fn worker_loop(receiver: Receiver<PdfRenderRequest>) {
-    let pdfium = match pdfium_instance() {
-        Ok(pdfium) => pdfium,
-        Err(error) => {
-            let message = format!("{error:#}");
-            while let Ok(request) = receiver.recv() {
-                let _ = request.sender.send(PdfRenderResponse {
-                    song_id: request.song_id,
-                    key: request.key,
-                    page_count: None,
-                    result: Err(message.clone()),
-                });
-            }
-            return;
+fn cache_writer_loop(receiver: Receiver<CacheWriteRequest>) {
+    while let Ok(request) = receiver.recv() {
+        if save_cached_page(&request.path, request.size, &request.rgba).is_ok()
+            && let Some(cache_dir) = request.path.parent()
+        {
+            let _ = prune_cache(cache_dir, MAX_CACHE_BYTES);
         }
-    };
+    }
+}
 
-    let mut worker = PdfWorker::new(&pdfium);
+fn worker_loop(receiver: Receiver<PdfRenderRequest>, cache_sender: SyncSender<CacheWriteRequest>) {
+    let mut worker = PdfWorker::new(cache_sender);
 
     while let Ok(request) = receiver.recv() {
         let result = worker
@@ -313,8 +241,17 @@ fn cache_file(path: &Path, page: usize, zoom: f32, cache_dir: &Path) -> PathBuf 
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("partition");
+    let mut identity = DefaultHasher::new();
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .hash(&mut identity);
+    if let Ok(metadata) = fs::metadata(path) {
+        metadata.len().hash(&mut identity);
+        metadata.modified().ok().hash(&mut identity);
+    }
     cache_dir.join(format!(
-        "{CACHE_VERSION}-{stem}-page-{page}-zoom-{:.0}.png",
+        "{CACHE_VERSION}-{stem}-{:016x}-page-{page}-zoom-{:.0}.png",
+        identity.finish(),
         zoom * 100.0
     ))
 }
@@ -332,15 +269,72 @@ fn read_cached_page(path: &Path) -> Result<RenderedPage> {
 }
 
 fn save_cached_page(path: &Path, size: [usize; 2], rgba: &[u8]) -> Result<()> {
-    image::save_buffer_with_format(
-        path,
+    let temp_path = path.with_extension(format!(
+        "tmp-{}-{}.png",
+        std::process::id(),
+        CACHE_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(error) = image::save_buffer_with_format(
+        &temp_path,
         rgba,
         size[0] as u32,
         size[1] as u32,
         image::ColorType::Rgba8,
         image::ImageFormat::Png,
-    )
-    .with_context(|| format!("Impossible d’écrire le cache {}", path.display()))?;
+    ) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error).with_context(|| format!("Impossible d’écrire le cache {}", path.display()));
+    }
+    if let Err(error) = fs::rename(&temp_path, path) {
+        if path.exists() {
+            fs::remove_file(path)
+                .with_context(|| format!("Impossible de remplacer le cache {}", path.display()))?;
+            fs::rename(&temp_path, path)
+                .with_context(|| format!("Impossible de publier le cache {}", path.display()))?;
+        } else {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error).with_context(|| format!("Impossible de publier le cache {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+fn prune_cache(cache_dir: &Path, max_bytes: u64) -> Result<()> {
+    let mut entries = Vec::new();
+    let mut total_bytes = 0_u64;
+    for entry in fs::read_dir(cache_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(CACHE_VERSION) || path.extension().is_none_or(|ext| ext != "png") {
+            continue;
+        }
+        if name.contains(".tmp-") {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() {
+            continue;
+        }
+        total_bytes = total_bytes.saturating_add(metadata.len());
+        entries.push((
+            metadata.modified().unwrap_or(std::time::UNIX_EPOCH),
+            metadata.len(),
+            path,
+        ));
+    }
+    entries.sort_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in entries {
+        if total_bytes <= max_bytes {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            total_bytes = total_bytes.saturating_sub(size);
+        }
+    }
     Ok(())
 }
 
@@ -352,6 +346,49 @@ mod tests {
     fn pdf_page_key_changes_with_page_or_zoom() {
         assert_ne!(page_key("ffpm:001", 1, 1.0), page_key("ffpm:001", 2, 1.0));
         assert_ne!(page_key("ffpm:001", 1, 1.0), page_key("ffpm:001", 1, 1.2));
+    }
+
+    #[test]
+    fn hayro_can_open_and_render_a_real_project_pdf() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("A1.pdf");
+        if !path.is_file() {
+            return;
+        }
+
+        let bytes = fs::read(&path).unwrap();
+        let pdf = Pdf::new(bytes).unwrap();
+        assert!(!pdf.pages().is_empty());
+
+        let page = &pdf.pages()[0];
+        let cache = RenderCache::new();
+        let rendered = render(
+            page,
+            &cache,
+            &InterpreterSettings::default(),
+            &RenderSettings::default(),
+            &PixmapSettings {
+                x_scale: 1.0,
+                y_scale: 1.0,
+                bg_color: WHITE,
+            },
+        );
+
+        assert!(rendered.width() > 0 && rendered.height() > 0);
+        assert_eq!(
+            rendered.data().len(),
+            usize::from(rendered.width()) * usize::from(rendered.height())
+        );
+    }
+
+    #[test]
+    fn cache_file_distinguishes_same_named_documents_in_different_directories() {
+        let cache_dir = Path::new("cache");
+        let first = cache_file(Path::new("/collection-a/score.pdf"), 1, 1.0, cache_dir);
+        let second = cache_file(Path::new("/collection-b/score.pdf"), 1, 1.0, cache_dir);
+
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -378,22 +415,44 @@ mod tests {
     }
 
     #[test]
-    fn known_source_partition_reports_one_page() {
+    fn cache_round_trip_and_pruning_keep_the_disk_budget() {
+        let cache_dir = std::env::temp_dir().join(format!(
+            "miredo-cache-test-{}-{}",
+            std::process::id(),
+            CACHE_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_path = cache_dir.join(format!("{CACHE_VERSION}-page.png"));
+        let rgba = vec![127; 8 * 8 * 4];
+
+        save_cached_page(&cache_path, [8, 8], &rgba).unwrap();
+        let cached = read_cached_page(&cache_path).unwrap();
+        assert_eq!(cached.size, [8, 8]);
+        assert_eq!(cached.rgba, rgba);
+
+        prune_cache(&cache_dir, 1).unwrap();
+        assert!(!cache_path.exists());
+        let _ = fs::remove_dir_all(cache_dir);
+    }
+
+    #[test]
+    fn known_source_partition_loads_and_renders_one_page() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("data")
-            .join("FFPM1.pdf");
+            .join("A1.pdf");
         if !path.is_file() {
             return;
         }
 
-        match pdfium_instance() {
-            Ok(pdfium) => {
-                let document = pdfium.load_pdf_from_file(&path, None).unwrap();
-                assert_eq!(document.pages().len(), 1);
-            }
-            Err(error) => eprintln!(
-                "PDFium non disponible dans cet environnement de test; test PDF ignoré: {error:#}"
-            ),
-        }
+        let cache_dir = std::env::temp_dir()
+            .join(format!("miredo-pdf-test-{}", std::process::id()));
+        let (cache_sender, _cache_receiver) = sync_channel(0);
+        let mut worker = PdfWorker::new(cache_sender);
+        worker.open_document(&path).unwrap();
+        let (page_count, page) = worker.render_page(1, 1.0, &cache_dir).unwrap();
+        assert_eq!(page_count, 1);
+        assert!(page.size[0] > 0 && page.size[1] > 0);
+        assert_eq!(page.rgba.len(), page.size[0] * page.size[1] * 4);
+        let _ = fs::remove_dir_all(cache_dir);
     }
 }
