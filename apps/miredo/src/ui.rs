@@ -474,7 +474,7 @@ impl MiReDoApp {
     }
 
     fn change_zoom(&mut self, delta: f32) {
-        self.zoom = (self.zoom + delta).clamp(0.7, 1.6);
+        self.zoom = (self.zoom + delta).clamp(0.5, 3.0);
         if let Err(error) = self
             .storage
             .set_preference("pdf_zoom", &self.zoom.to_string())
