@@ -1,45 +1,57 @@
-# [Project name]
+# MiReDo
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+MiReDo is a native Rust desktop library for searching, reading, and organizing locally stored Malagasy hymn collections and PDF scores.
 
-## Run & Operate
+## Run & operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `cargo run --manifest-path apps/miredo/Cargo.toml` — start the native desktop app.
+- `cargo test --manifest-path apps/miredo/Cargo.toml` — run the Rust tests.
+- The VNC workflow named `MiReDo desktop` runs the app in the Replit desktop preview.
+- Runtime PDF support requires Poppler's `pdfinfo` and `pdftoppm` commands on `PATH`.
+- No API server, remote database, environment secret, or internet connection is required by MiReDo.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Rust stable and eframe/egui for the native desktop interface.
+- SQLite with bundled SQLite library for local user state.
+- JSON catalogs, localization, and palette are loaded from the app directory.
+- Poppler utilities render the supplied PDF scores to images.
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `apps/miredo/src/domain.rs` — normalized app-level song and collection models.
+- `apps/miredo/src/data.rs` — imports four JSON catalogs and matches PDFs to songs.
+- `apps/miredo/src/search.rs` — accent-insensitive local search.
+- `apps/miredo/src/storage.rs` — favorites, playlists, reading positions, and preferences.
+- `apps/miredo/src/pdf.rs` — background PDF page rendering.
+- `apps/miredo/src/ui.rs` — native screens and interaction flow.
+- `apps/miredo/resources/i18n.json` — French, Malagasy, and English interface strings.
+- `apps/miredo/resources/palette.json` — light/dark semantic colors.
+- `apps/miredo/data/` — offline song catalogs and PDF files.
+- `apps/miredo/docs/miredo/` — complete product documentation.
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- MiReDo is a Rust native desktop app, not a browser UI wrapped in a desktop shell.
+- Source records are normalized before reaching the UI; user data stores stable song IDs rather than copied song records.
+- Search and catalog access work locally; no runtime API or connection to the source repository is used.
+- SQLite holds user preferences and collections, separate from the imported source catalogs.
+- PDF rendering uses system Poppler tools so the source PDFs remain unchanged.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+The app browses four hymn collections, searches by number/title/lyrics/author, opens text and PDF views for the same song, and saves favorites and named playlists across launches. It supports French, Malagasy, and English, plus light, dark, and system appearance modes.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Keep the upstream `TkAbeleon/Fihirana-FFPM` repository unchanged. Use its data as local input in this separate MiReDo project; do not push the imported dataset back to it.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- PDF viewing needs `pdfinfo` and `pdftoppm` installed and discoverable through `PATH`.
+- The source repository's metadata does not declare a license; verify redistribution rights before sharing the imported corpus.
 
 ## Pointers
 
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- See `apps/miredo/README.md` for setup and testing commands.
+- See `apps/miredo/docs/miredo/` for the original product specification.

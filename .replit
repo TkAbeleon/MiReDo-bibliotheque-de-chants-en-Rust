@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "rust-stable", "python-base-3.13"]
 
 [deployment]
 router = "application"
@@ -11,6 +11,26 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "MiReDo desktop"
+
+[[workflows.workflow]]
+name = "MiReDo desktop"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run --manifest-path apps/miredo/Cargo.toml"
+
+[workflows.workflow.metadata]
+outputType = "vnc"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -18,3 +38,7 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+packages = ["xorg.libX11", "xorg.libxcb", "xorg.libXcursor", "xorg.libXi", "xorg.libXrandr", "xorg.libXinerama", "xorg.libXfixes", "xorg.libXrender", "xorg.libXext", "xorg.libXScrnSaver", "xorg.libXxf86vm", "libxkbcommon"]
