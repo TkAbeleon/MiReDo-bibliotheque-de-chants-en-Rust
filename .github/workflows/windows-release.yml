@@ -1,0 +1,104 @@
+name: MiReDo Windows x64
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/miredo/**"
+      - ".github/workflows/windows-release.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build and package MiReDo for Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Make runtime resources portable for this build
+        shell: pwsh
+        run: |
+          $path = "apps/miredo/src/ui/mod.rs"
+          $content = Get-Content $path -Raw
+          $old = 'const APP_DIR: &str = env!("CARGO_MANIFEST_DIR");'
+          $new = @'
+          fn app_dir() -> PathBuf {
+              std::env::current_exe()
+                  .ok()
+                  .and_then(|exe| exe.parent().map(PathBuf::from))
+                  .unwrap_or_else(|| PathBuf::from("."))
+          }
+          '@
+          if (-not $content.Contains($old)) {
+            throw "Expected APP_DIR declaration was not found; refusing to build a non-portable package."
+          }
+          $content = $content.Replace($old, $new.Trim())
+          $resourceOld = 'PathBuf::from(APP_DIR).join("resources")'
+          $dataOld = 'PathBuf::from(APP_DIR).join("data")'
+          if (-not $content.Contains($resourceOld) -or -not $content.Contains($dataOld)) {
+            throw "Expected resource/data path expressions were not found; refusing to build."
+          }
+          $content = $content.Replace($resourceOld, 'app_dir().join("resources")')
+          $content = $content.Replace($dataOld, 'app_dir().join("data")')
+          Set-Content -Path $path -Value $content -NoNewline -Encoding utf8
+
+      - name: Run MiReDo tests
+        run: cargo test --manifest-path apps/miredo/Cargo.toml --locked
+
+      - name: Build release executable
+        run: cargo build --manifest-path apps/miredo/Cargo.toml --release --locked
+
+      - name: Assemble portable ZIP
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "MiReDo-Windows-x64"
+          $zip = Join-Path $env:RUNNER_TEMP "MiReDo-Windows-x64.zip"
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stage | Out-Null
+
+          Copy-Item "apps/miredo/target/release/miredo.exe" (Join-Path $stage "MiReDo.exe")
+          Copy-Item "apps/miredo/resources" $stage -Recurse
+          Copy-Item "apps/miredo/data" $stage -Recurse
+
+          @'
+          MiReDo — Windows x64
+          ====================
+
+          1. Extrayez tout le contenu du ZIP dans un dossier accessible en écriture.
+          2. Lancez MiReDo.exe.
+          3. Conservez les dossiers resources et data à côté de MiReDo.exe.
+
+          L'application crée automatiquement sa base de données utilisateur dans le
+          dossier de données local Windows. Les favoris, listes de lecture et
+          préférences ne sont pas enregistrés dans le dossier du programme.
+
+          Cette archive contient les ressources locales nécessaires au catalogue.
+          Une connexion Internet et Rust ne sont pas requis pour l'utilisation
+          normale après extraction.
+
+          Si Windows affiche un avertissement de sécurité, vérifiez la provenance
+          de l'archive avant de choisir de l'exécuter.
+          '@ | Set-Content -Path (Join-Path $stage "LIRE-MOI.txt") -Encoding utf8
+
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host "ZIP créé : $zip"
+          Get-Item $zip | Select-Object FullName, Length
+
+      - name: Upload Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiReDo-Windows-x64
+          path: ${{ runner.temp }}/MiReDo-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
