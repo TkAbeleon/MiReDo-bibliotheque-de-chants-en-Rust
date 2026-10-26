@@ -26,7 +26,22 @@ mod theme;
 
 use self::icons::{icon_button, paint_app_icon, pdf_toolbar_icon_button};
 
-const APP_DIR: &str = env!("CARGO_MANIFEST_DIR");
+fn app_dir() -> PathBuf {
+    // On Windows, packaged resources live beside the executable.
+    // Keep the existing manifest-directory behavior on Linux and macOS
+    // so development runs and the tested Fedora build remain unchanged.
+    #[cfg(target_os = "windows")]
+    {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+}
 const MAX_PDF_TEXTURES: usize = 6;
 const PDF_VIEWPORT_PADDING: f32 = 12.0;
 
@@ -234,11 +249,11 @@ pub struct MiReDoApp {
 impl MiReDoApp {
     pub fn new(_creation_context: &eframe::CreationContext<'_>) -> Result<Self> {
         egui_extras::install_image_loaders(&_creation_context.egui_ctx);
-        let resources_dir = PathBuf::from(APP_DIR).join("resources");
+        let resources_dir = app_dir().join("resources");
         let translator = Translator::load(&resources_dir.join("i18n.json"))?;
         let light_palette = Palette::load(&resources_dir.join("palette.json"), "light")?;
         let dark_palette = Palette::load(&resources_dir.join("palette.json"), "dark")?;
-        let data_dir = PathBuf::from(APP_DIR).join("data");
+        let data_dir = app_dir().join("data");
         let (songs, report) = data::load_library(&data_dir)?;
         let storage = UserStorage::open()?;
         let locale = storage
