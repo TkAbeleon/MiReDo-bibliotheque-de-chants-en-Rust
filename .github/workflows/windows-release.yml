@@ -25,39 +25,11 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Make runtime resources portable for this build
-        shell: pwsh
-        run: |
-          $path = "apps/miredo/src/ui/mod.rs"
-          $content = Get-Content $path -Raw
-          $content = $content.TrimStart([char]0xFEFF)
-          $old = 'const APP_DIR: &str = env!("CARGO_MANIFEST_DIR");'
-          $new = @'
-          fn app_dir() -> PathBuf {
-              std::env::current_exe()
-                  .ok()
-                  .and_then(|exe| exe.parent().map(PathBuf::from))
-                  .unwrap_or_else(|| PathBuf::from("."))
-          }
-          '@
-          if (-not $content.Contains($old)) {
-            throw "Expected APP_DIR declaration was not found; refusing to build a non-portable package."
-          }
-          $content = $content.Replace($old, $new.Trim())
-          $resourceOld = 'PathBuf::from(APP_DIR).join("resources")'
-          $dataOld = 'PathBuf::from(APP_DIR).join("data")'
-          if (-not $content.Contains($resourceOld) -or -not $content.Contains($dataOld)) {
-            throw "Expected resource/data path expressions were not found; refusing to build."
-          }
-          $content = $content.Replace($resourceOld, 'app_dir().join("resources")')
-          $content = $content.Replace($dataOld, 'app_dir().join("data")')
-          Set-Content -Path $path -Value $content -NoNewline -Encoding utf8
-
       - name: Run MiReDo tests
-        run: cargo test --manifest-path apps/miredo/Cargo.toml --locked
+        run: cargo test --manifest-path apps/miredo/Cargo.toml --locked --target x86_64-pc-windows-msvc
 
       - name: Build release executable
-        run: cargo build --manifest-path apps/miredo/Cargo.toml --release --locked
+        run: cargo build --manifest-path apps/miredo/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
 
       - name: Assemble portable ZIP
         shell: pwsh
@@ -68,7 +40,7 @@ jobs:
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $stage | Out-Null
 
-          Copy-Item "apps/miredo/target/release/miredo.exe" (Join-Path $stage "MiReDo.exe")
+          Copy-Item "apps/miredo/target/x86_64-pc-windows-msvc/release/miredo.exe" (Join-Path $stage "MiReDo.exe")
           Copy-Item "apps/miredo/resources" $stage -Recurse
           Copy-Item "apps/miredo/data" $stage -Recurse
 
