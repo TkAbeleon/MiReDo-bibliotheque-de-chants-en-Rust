@@ -123,7 +123,7 @@ impl MiReDoApp {
         self.settings_card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             self.settings_section(ui, "settings.data");
-            let data_path = PathBuf::from(APP_DIR).join("data").display().to_string();
+            let data_path = super::super::app_dir().join("data").display().to_string();
             ui.add(
                 egui::Label::new(format!("{}: {data_path}", self.tr("settings.data_path")))
                     .truncate(),
@@ -149,7 +149,7 @@ impl MiReDoApp {
                 }
             });
             if ui.button(self.tr("settings.reload")).clicked() {
-                let data_dir = PathBuf::from(APP_DIR).join("data");
+                let data_dir = super::super::app_dir().join("data");
                 match data::load_library(&data_dir) {
                     Ok((songs, report)) => {
                         self.songs = songs;
