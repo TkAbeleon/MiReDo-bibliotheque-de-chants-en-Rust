@@ -30,6 +30,7 @@ jobs:
         run: |
           $path = "apps/miredo/src/ui/mod.rs"
           $content = Get-Content $path -Raw
+          $content = $content.TrimStart([char]0xFEFF)
           $old = 'const APP_DIR: &str = env!("CARGO_MANIFEST_DIR");'
           $new = @'
           fn app_dir() -> PathBuf {
